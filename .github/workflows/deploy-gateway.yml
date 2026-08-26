@@ -1,0 +1,25 @@
+name: deploy gateway
+
+# Placeholder until M4, when the v1 host is decided (see PLAN.md open
+# questions). Builds the gateway so the deploy artifact is proven on main;
+# the deploy step lands with the host decision.
+
+on:
+  push:
+    branches: [main]
+    paths: ["gateway/**"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm install
+      - run: npm run build --workspace=@walkie/gateway
+      - name: Deploy
+        run: echo "deploy target TBD (M4) — see PLAN.md"
