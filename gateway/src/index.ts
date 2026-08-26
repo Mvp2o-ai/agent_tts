@@ -1,5 +1,5 @@
 /**
- * walkie gateway — entry point.
+ * agent_tts gateway — entry point.
  *
  * Responsibilities (see /PLAN.md):
  *  - WebSocket sessions with the mobile app (audio up, audio + events down)
@@ -12,4 +12,4 @@
 
 const PORT = Number(process.env.PORT ?? 4100);
 
-console.log(`walkie gateway scaffold — would listen on :${PORT} (M1 not started)`);
+console.log(`agent_tts gateway scaffold — would listen on :${PORT} (M1 not started)`);

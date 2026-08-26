@@ -1,4 +1,4 @@
-# walkie mobile
+# agent_tts mobile
 
 Expo React Native app. Two modes only:
 

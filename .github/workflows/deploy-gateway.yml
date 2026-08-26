@@ -20,6 +20,6 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm install
-      - run: npm run build --workspace=@walkie/gateway
+      - run: npm run build --workspace=@agent_tts/gateway
       - name: Deploy
         run: echo "deploy target TBD (M4) — see PLAN.md"

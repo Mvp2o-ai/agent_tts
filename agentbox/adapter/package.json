@@ -1,5 +1,5 @@
 {
-  "name": "@walkie/agentbox-adapter",
+  "name": "@agent_tts/agentbox-adapter",
   "version": "0.0.1",
   "private": true,
   "type": "module",

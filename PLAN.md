@@ -1,4 +1,4 @@
-# walkie — Plan
+# agent_tts — Plan
 
 ## What it is
 
@@ -57,8 +57,7 @@ agentbox (Docker, one per session)
 
 ## Open questions to align on
 
-1. Project/product name — "walkie" is a placeholder.
-2. Where does the gateway live in v1 — new Hetzner VPS, or share existing infra?
+1. Where does the gateway live in v1 — new Hetzner VPS, or share existing infra?
 3. Container-per-session vs. long-lived per-user container (affects cold-start vs. cost).
 4. Who pays for model keys in open-source mode — BYO keys only? (Assumed yes: BYO everything.)
 5. Stop word default and whether it must work while TTS is playing loudly (echo cancellation requirements).

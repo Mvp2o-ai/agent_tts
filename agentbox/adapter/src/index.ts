@@ -2,7 +2,7 @@
  * agentbox adapter — entry point.
  *
  * Startup:
- *  1. Read env: WALKIE_HARNESS, WALKIE_REPO_URL, WALKIE_GIT_CREDENTIAL,
+ *  1. Read env: AGENT_TTS_HARNESS, AGENT_TTS_REPO_URL, AGENT_TTS_GIT_CREDENTIAL,
  *     harness/model keys (BYO, passed through by the gateway from user config).
  *  2. Clone the repo into /workspace.
  *  3. Select the harness adapter and bridge it to the JSON-lines box protocol
@@ -12,7 +12,7 @@
  * turn immediately — this backs the mobile stop word.
  */
 
-const harness = process.env.WALKIE_HARNESS ?? "claude-code";
+const harness = process.env.AGENT_TTS_HARNESS ?? "claude-code";
 
 console.log(
   JSON.stringify({
