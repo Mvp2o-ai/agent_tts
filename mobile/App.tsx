@@ -1,26 +1,44 @@
 import { StatusBar } from "expo-status-bar";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
-  FlatList,
+  Alert,
   KeyboardAvoidingView,
   Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
-  type ListRenderItem,
 } from "react-native";
-import { fetchConfig, saveConfig, type HarnessId } from "./src/api";
+import { fetchConfig, killSession, saveConfig, type HarnessId } from "./src/api";
 import { normalizeGatewayUrl } from "./src/protocol";
 import { HARNESSES, type DeviceSettings } from "./src/settings";
 import { useDeviceSettings } from "./src/useDeviceSettings";
+import { useVoiceSession, type VoiceMode } from "./src/useVoiceSession";
 import {
-  useVoiceSession,
-  type SessionEvent,
-  type VoiceMode,
-} from "./src/useVoiceSession";
+  Button,
+  Card,
+  Field,
+  SectionLabel,
+  Segmented,
+  StatusPill,
+  Toast,
+} from "./src/ui/components";
+import {
+  CheckIcon,
+  DownloadIcon,
+  GearIcon,
+  LinkIcon,
+  MicIcon,
+  PowerIcon,
+  StopIcon,
+  TrashIcon,
+  UploadIcon,
+  WaveIcon,
+} from "./src/ui/icons";
+import { TalkButton, type TalkState } from "./src/ui/TalkButton";
+import { Transcript } from "./src/ui/Transcript";
+import { color, font, inset, radius, space } from "./src/ui/theme";
 
 type Tab = "talk" | "settings";
 
@@ -47,20 +65,12 @@ export default function App() {
 
   const session = useVoiceSession(conn);
   const connected = session.status !== "disconnected";
-  const listRef = useRef<FlatList<SessionEvent>>(null);
 
   const selectedHarness =
     HARNESSES.find((h) => h.id === settings.harness) ?? HARNESSES[0]!;
 
   const patch = (partial: Partial<DeviceSettings>) =>
     setSettings((prev) => ({ ...prev, ...partial }));
-
-  const renderEvent: ListRenderItem<SessionEvent> = ({ item }) => (
-    <View style={styles.eventRow}>
-      <Text style={[styles.eventKind, kindStyle(item.kind)]}>{item.kind}</Text>
-      <Text style={styles.eventText}>{item.text}</Text>
-    </View>
-  );
 
   useEffect(() => {
     if (!configMsg) return;
@@ -129,627 +139,525 @@ export default function App() {
     }
   }
 
+  function onKillSession() {
+    Alert.alert(
+      "Kill agent session?",
+      "This aborts the harness and force-removes its Docker container. Uncommitted work in that box is lost.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Kill",
+          style: "destructive",
+          onPress: () => {
+            void (async () => {
+              session.abort();
+              session.disconnect();
+              try {
+                const result = await killSession(conn);
+                setConfigOk(true);
+                setConfigMsg(
+                  result.killed > 0
+                    ? `Killed ${result.killed} container${result.killed === 1 ? "" : "s"}.`
+                    : "Session torn down. No leftover containers.",
+                );
+              } catch (err) {
+                setConfigOk(false);
+                setConfigMsg(
+                  err instanceof Error ? err.message : "Kill failed.",
+                );
+              }
+            })();
+          },
+        },
+      ],
+    );
+  }
+
+  const talkState = resolveTalkState(session.status, session.speaking, pttHeld);
+
   return (
     <View style={styles.root}>
       <StatusBar style="light" />
+
       <View style={styles.header}>
-        <Text style={styles.title}>agent_tts</Text>
-        <Text style={styles.status}>
-          {session.status}
-          {session.speaking ? " · speaking" : ""}
-        </Text>
-      </View>
-
-      <View style={styles.tabs}>
-        <Pressable
-          style={[styles.tab, tab === "talk" && styles.tabActive]}
-          onPress={() => setTab("talk")}
-        >
-          <Text style={[styles.tabLabel, tab === "talk" && styles.tabLabelActive]}>
-            Talk
-          </Text>
-        </Pressable>
-        <Pressable
-          style={[styles.tab, tab === "settings" && styles.tabActive]}
-          onPress={() => setTab("settings")}
-        >
-          <Text
-            style={[
-              styles.tabLabel,
-              tab === "settings" && styles.tabLabelActive,
-            ]}
-          >
-            Settings
-          </Text>
-        </Pressable>
-      </View>
-
-      {configMsg ? (
-        <View
-          accessibilityRole="alert"
-          accessibilityLiveRegion="assertive"
-          style={[
-            styles.toast,
-            configOk ? styles.toastOk : styles.toastErr,
-          ]}
-        >
-          <Text style={styles.toastText}>
-            {configOk ? "✓" : "!"} {configMsg}
-          </Text>
+        <View>
+          <Text style={styles.wordmark}>agent_tts</Text>
+          <Text style={styles.tagline}>{describeTarget(settings)}</Text>
         </View>
-      ) : null}
+        <StatusPill
+          label={statusLabel(session.status, session.speaking)}
+          tone={statusTone(session.status, session.speaking)}
+          pulsing={session.status === "connecting" || session.speaking}
+        />
+      </View>
+
+      {configMsg ? <Toast message={configMsg} ok={configOk} /> : null}
 
       {tab === "talk" ? (
-        <View style={styles.talk}>
-          <View style={styles.modeRow}>
-            <Pressable
-              disabled={connected}
-              style={[
-                styles.modeBtn,
-                mode === "ptt" && styles.modeBtnActive,
-                connected && styles.disabled,
-              ]}
-              onPress={() => setMode("ptt")}
-            >
-              <Text style={styles.modeLabel}>Walkie-talkie</Text>
-            </Pressable>
-            <Pressable
-              disabled={connected}
-              style={[
-                styles.modeBtn,
-                mode === "handsfree" && styles.modeBtnActive,
-                connected && styles.disabled,
-              ]}
-              onPress={() => setMode("handsfree")}
-            >
-              <Text style={styles.modeLabel}>Hands-free</Text>
-            </Pressable>
-          </View>
-
-          <Pressable
-            style={[
-              styles.connectBtn,
-              connected ? styles.connectBtnOn : styles.connectBtnOff,
+        <View style={styles.screen}>
+          <Segmented<VoiceMode>
+            value={mode}
+            onChange={setMode}
+            disabled={connected}
+            options={[
+              {
+                value: "ptt",
+                label: "Walkie-talkie",
+                icon: (
+                  <MicIcon
+                    size={16}
+                    color={mode === "ptt" ? color.text : color.textMuted}
+                  />
+                ),
+              },
+              {
+                value: "handsfree",
+                label: "Hands-free",
+                icon: (
+                  <WaveIcon
+                    size={16}
+                    color={mode === "handsfree" ? color.text : color.textMuted}
+                  />
+                ),
+              },
             ]}
+          />
+
+          <TalkButton
+            mode={mode}
+            state={talkState}
+            onPressIn={() => {
+              setPttHeld(true);
+              session.pttStart();
+            }}
+            onPressOut={() => {
+              setPttHeld(false);
+              session.pttEnd();
+            }}
+          />
+
+          <Button
+            tone={connected ? "neutral" : "primary"}
+            label={connectLabel(session.status)}
+            icon={
+              <PowerIcon
+                size={18}
+                color={connected ? color.text : color.bg}
+              />
+            }
             onPress={() => {
               if (connected) session.disconnect();
               else session.connect(mode);
             }}
-          >
-            <Text style={styles.connectLabel}>
-              {session.status === "disconnected"
-                ? "Connect"
-                : session.status === "connecting"
-                  ? "Cancel"
-                  : "Disconnect"}
-            </Text>
-          </Pressable>
-
-          {mode === "ptt" ? (
-            <Pressable
-              disabled={session.status !== "ready"}
-              onPressIn={() => {
-                setPttHeld(true);
-                session.pttStart();
-              }}
-              onPressOut={() => {
-                setPttHeld(false);
-                session.pttEnd();
-              }}
-              style={[
-                styles.ptt,
-                pttHeld && styles.pttHeld,
-                session.status !== "ready" && styles.disabled,
-              ]}
-            >
-              <Text style={styles.pttLabel}>
-                {pttHeld ? "Release to send" : "Hold to talk"}
-              </Text>
-            </Pressable>
-          ) : (
-            <View
-              style={[
-                styles.openMic,
-                session.status === "ready" && styles.openMicLive,
-              ]}
-            >
-              <View
-                style={[
-                  styles.micDot,
-                  session.status === "ready" && styles.micDotLive,
-                ]}
-              />
-              <Text style={styles.openMicLabel}>
-                {session.status === "ready" ? "Open mic" : "Mic closed"}
-              </Text>
-            </View>
-          )}
-
-          <Pressable style={styles.stopBtn} onPress={() => session.abort()}>
-            <Text style={styles.stopLabel}>Stop</Text>
-          </Pressable>
-
-          <FlatList
-            ref={listRef}
-            style={styles.feed}
-            data={session.events}
-            keyExtractor={(item) => String(item.id)}
-            renderItem={renderEvent}
-            onContentSizeChange={() =>
-              listRef.current?.scrollToEnd({ animated: true })
-            }
-            onLayout={() => listRef.current?.scrollToEnd({ animated: false })}
-            ListEmptyComponent={
-              <Text style={styles.empty}>Transcripts and events appear here.</Text>
-            }
           />
+
+          <View style={styles.actionRow}>
+            <Button
+              style={styles.actionItem}
+              tone="ghost"
+              label="Stop"
+              accessibilityHint="Aborts the current turn without closing the session."
+              disabled={!connected}
+              icon={<StopIcon size={15} color={color.textMuted} />}
+              onPress={() => session.abort()}
+            />
+            <Button
+              style={styles.actionItem}
+              tone="danger"
+              label="Kill session"
+              accessibilityHint="Force-removes the agent's Docker container."
+              icon={<TrashIcon size={16} color={color.danger} />}
+              onPress={onKillSession}
+            />
+          </View>
+
+          <View style={styles.feed}>
+            <Transcript events={session.events} />
+          </View>
         </View>
       ) : (
         <KeyboardAvoidingView
-          style={styles.settingsWrap}
+          style={styles.screen}
           behavior={Platform.OS === "ios" ? "padding" : undefined}
+          keyboardVerticalOffset={inset.top}
         >
           <ScrollView
-            style={styles.settings}
             keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
             contentContainerStyle={styles.settingsContent}
           >
-            <Text style={styles.hint}>
-              {hydrated
-                ? "Saved on this device only. Uninstall clears it. Save still writes repo/harness/voice to the gateway."
-                : "Loading device settings…"}
-            </Text>
-            <Text style={styles.section}>Gateway</Text>
-            <Field
-              label="Gateway URL"
-              value={settings.gatewayUrl}
-              onChange={(v) => patch({ gatewayUrl: v })}
-              autoCapitalize="none"
-              placeholder="http://10.0.0.12:4100"
-            />
-            <Field
-              label="Gateway token"
-              value={settings.token}
-              onChange={(v) => patch({ token: v })}
-              secure
-              autoCapitalize="none"
-            />
-            <Field
-              label="User id"
-              value={settings.userId}
-              onChange={(v) => patch({ userId: v })}
-              autoCapitalize="none"
-              placeholder="default"
-            />
-
-            <Pressable
-              style={[styles.actionBtn, configBusy && styles.disabled]}
-              disabled={configBusy}
-              onPress={() => void onLoadConfig()}
-            >
-              <Text style={styles.actionLabel}>
-                {configBusy && configAction === "load"
-                  ? "Loading…"
-                  : configOk && configAction === "load" && configMsg
-                    ? "Loaded ✓"
-                    : "Load config"}
+            <SectionLabel icon={<LinkIcon size={13} color={color.textMuted} />}>
+              Gateway
+            </SectionLabel>
+            <Card>
+              <Field
+                label="Gateway URL"
+                value={settings.gatewayUrl}
+                onChange={(v) => patch({ gatewayUrl: v })}
+                autoCapitalize="none"
+                mono
+                placeholder="https://your-host.example.com"
+              />
+              <Field
+                label="Gateway token"
+                value={settings.token}
+                onChange={(v) => patch({ token: v })}
+                secure
+                autoCapitalize="none"
+              />
+              <Field
+                label="User id"
+                value={settings.userId}
+                onChange={(v) => patch({ userId: v })}
+                autoCapitalize="none"
+                mono
+                placeholder="default"
+              />
+              <Button
+                tone="neutral"
+                busy={configBusy && configAction === "load"}
+                label={
+                  configBusy && configAction === "load"
+                    ? "Loading…"
+                    : "Load config"
+                }
+                icon={<DownloadIcon size={17} color={color.text} />}
+                onPress={() => void onLoadConfig()}
+              />
+              <Text style={styles.note}>
+                {hydrated
+                  ? "Connection fields stay on this device. Everything below is stored by the gateway."
+                  : "Loading device settings…"}
               </Text>
-            </Pressable>
+            </Card>
 
-            <Text style={styles.section}>Repo</Text>
-            <Field
-              label="Repo URL"
-              value={settings.repoUrl}
-              onChange={(v) => patch({ repoUrl: v })}
-              autoCapitalize="none"
-              placeholder="https://github.com/org/repo.git"
-            />
-            <Field
-              label="Git PAT"
-              value={settings.gitPat}
-              onChange={(v) => patch({ gitPat: v })}
-              secure
-              autoCapitalize="none"
-            />
-            <Field
-              label="Default branch"
-              value={settings.defaultBranch}
-              onChange={(v) => patch({ defaultBranch: v })}
-              autoCapitalize="none"
-              placeholder="main"
-            />
+            <SectionLabel icon={<LinkIcon size={13} color={color.textMuted} />}>
+              Git access
+            </SectionLabel>
+            <Card>
+              <Field
+                label="Git PAT"
+                value={settings.gitPat}
+                onChange={(v) => patch({ gitPat: v })}
+                secure
+                autoCapitalize="none"
+                hint="Fine-grained token for the repos you will name by voice. Contents + Pull requests (read/write), short expiry. The workspace starts empty — tell the agent which remotes to clone."
+              />
+              <Field
+                label="Git host"
+                value={settings.repoUrl}
+                onChange={(v) => patch({ repoUrl: v })}
+                autoCapitalize="none"
+                mono
+                placeholder="github.com"
+                hint="Scopes git and gh auth to this host. The gateway never clones."
+              />
+            </Card>
 
-            <Text style={styles.section}>Harness</Text>
+            <SectionLabel icon={<MicIcon size={13} color={color.textMuted} />}>
+              Harness
+            </SectionLabel>
             <View style={styles.harnessGrid}>
-              {HARNESSES.map((h) => (
-                <Pressable
-                  key={h.id}
-                  style={[
-                    styles.harnessBtn,
-                    settings.harness === h.id && styles.harnessBtnActive,
-                  ]}
-                  onPress={() => patch({ harness: h.id as HarnessId })}
-                >
-                  <Text style={styles.harnessLabel}>{h.label}</Text>
-                </Pressable>
-              ))}
+              {HARNESSES.map((h) => {
+                const active = settings.harness === h.id;
+                return (
+                  <Pressable
+                    key={h.id}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected: active }}
+                    accessibilityLabel={h.label}
+                    onPress={() => patch({ harness: h.id as HarnessId })}
+                    style={[
+                      styles.harnessCard,
+                      active && styles.harnessCardActive,
+                    ]}
+                  >
+                    <View style={styles.harnessTop}>
+                      <Text
+                        style={[
+                          styles.harnessLabel,
+                          active && styles.harnessLabelActive,
+                        ]}
+                      >
+                        {h.label}
+                      </Text>
+                      {active ? (
+                        <CheckIcon size={14} color={color.accent} />
+                      ) : null}
+                    </View>
+                    <Text style={styles.harnessEnv}>{h.keyEnv}</Text>
+                  </Pressable>
+                );
+              })}
             </View>
-            <Field
-              label={`${selectedHarness.label} API key (${selectedHarness.keyEnv})`}
-              value={settings.modelKeys[selectedHarness.keyEnv] ?? ""}
-              onChange={(v) =>
-                setSettings((prev) => ({
-                  ...prev,
-                  modelKeys: {
-                    ...prev.modelKeys,
-                    [selectedHarness.keyEnv]: v,
-                  },
-                }))
-              }
-              secure
-              autoCapitalize="none"
-            />
+            <Card>
+              <Field
+                label={`${selectedHarness.label} API key`}
+                value={settings.modelKeys[selectedHarness.keyEnv] ?? ""}
+                onChange={(v) =>
+                  setSettings((prev) => ({
+                    ...prev,
+                    modelKeys: {
+                      ...prev.modelKeys,
+                      [selectedHarness.keyEnv]: v,
+                    },
+                  }))
+                }
+                secure
+                autoCapitalize="none"
+                hint={`Sent to the box as ${selectedHarness.keyEnv}.`}
+              />
+            </Card>
 
-            <Text style={styles.section}>Voice</Text>
-            <Field
-              label="Stop word"
-              value={settings.stopWord}
-              onChange={(v) => patch({ stopWord: v })}
-              placeholder="hard stop"
-            />
-            <Field
-              label="ElevenLabs voice id"
-              value={settings.voiceId}
-              onChange={(v) => patch({ voiceId: v })}
-              autoCapitalize="none"
-            />
-
-            <Pressable
-              style={[styles.actionBtn, configBusy && styles.disabled]}
-              disabled={configBusy}
-              onPress={() => void onSaveConfig()}
-            >
-              <Text style={styles.actionLabel}>
-                {configBusy && configAction === "save"
-                  ? "Saving…"
-                  : configOk && configAction === "save" && configMsg
-                    ? "Saved ✓"
-                    : "Save"}
-              </Text>
-            </Pressable>
+            <SectionLabel icon={<WaveIcon size={13} color={color.textMuted} />}>
+              Voice
+            </SectionLabel>
+            <Card>
+              <Field
+                label="Stop word"
+                value={settings.stopWord}
+                onChange={(v) => patch({ stopWord: v })}
+                placeholder="hard stop"
+                hint="Say this at any time to abort the current turn."
+              />
+              <Field
+                label="ElevenLabs voice id"
+                value={settings.voiceId}
+                onChange={(v) => patch({ voiceId: v })}
+                autoCapitalize="none"
+                mono
+                placeholder="Gateway default"
+              />
+            </Card>
           </ScrollView>
+
+          <View style={styles.saveBar}>
+            <Button
+              tone="primary"
+              busy={configBusy && configAction === "save"}
+              label={
+                configBusy && configAction === "save"
+                  ? "Saving…"
+                  : "Save to gateway"
+              }
+              icon={<UploadIcon size={18} color={color.bg} />}
+              onPress={() => void onSaveConfig()}
+            />
+          </View>
         </KeyboardAvoidingView>
       )}
+
+      <View style={styles.tabBar}>
+        <TabItem
+          label="Talk"
+          active={tab === "talk"}
+          onPress={() => setTab("talk")}
+          icon={
+            <MicIcon
+              size={22}
+              color={tab === "talk" ? color.accent : color.textDim}
+            />
+          }
+        />
+        <TabItem
+          label="Settings"
+          active={tab === "settings"}
+          onPress={() => setTab("settings")}
+          icon={
+            <GearIcon
+              size={22}
+              color={tab === "settings" ? color.accent : color.textDim}
+            />
+          }
+        />
+      </View>
     </View>
   );
 }
 
-function Field({
+function TabItem({
   label,
-  value,
-  onChange,
-  secure,
-  autoCapitalize,
-  placeholder,
+  icon,
+  active,
+  onPress,
 }: {
   label: string;
-  value: string;
-  onChange: (v: string) => void;
-  secure?: boolean;
-  autoCapitalize?: "none" | "sentences";
-  placeholder?: string;
+  icon: ReactNode;
+  active: boolean;
+  onPress: () => void;
 }) {
   return (
-    <View style={styles.field}>
-      <Text style={styles.fieldLabel}>{label}</Text>
-      <TextInput
-        style={styles.input}
-        value={value}
-        onChangeText={onChange}
-        secureTextEntry={secure}
-        autoCapitalize={autoCapitalize ?? "sentences"}
-        autoCorrect={false}
-        placeholder={placeholder}
-        placeholderTextColor="#6b7385"
-      />
-    </View>
+    <Pressable
+      accessibilityRole="tab"
+      accessibilityState={{ selected: active }}
+      accessibilityLabel={label}
+      onPress={onPress}
+      style={styles.tabItem}
+    >
+      {icon}
+      <Text style={[styles.tabLabel, active && styles.tabLabelActive]}>
+        {label}
+      </Text>
+    </Pressable>
   );
 }
 
-function kindStyle(kind: SessionEvent["kind"]) {
-  switch (kind) {
-    case "error":
-      return styles.kindError;
-    case "agent":
-      return styles.kindAgent;
-    case "tool":
-      return styles.kindTool;
-    case "transcript":
-    case "partial":
-      return styles.kindUser;
-    default:
-      return styles.kindMeta;
-  }
+function resolveTalkState(
+  status: string,
+  speaking: boolean,
+  held: boolean,
+): TalkState {
+  if (status !== "ready") return "offline";
+  if (held) return "capturing";
+  if (speaking) return "speaking";
+  return "idle";
+}
+
+function connectLabel(status: string): string {
+  if (status === "disconnected") return "Connect";
+  if (status === "connecting") return "Cancel";
+  return "Disconnect";
+}
+
+function statusLabel(status: string, speaking: boolean): string {
+  if (speaking) return "Speaking";
+  if (status === "ready") return "Live";
+  if (status === "connecting") return "Connecting";
+  return "Offline";
+}
+
+function statusTone(
+  status: string,
+  speaking: boolean,
+): "idle" | "busy" | "live" | "error" {
+  if (speaking || status === "ready") return "live";
+  if (status === "connecting") return "busy";
+  return "idle";
+}
+
+function describeTarget(settings: DeviceSettings): string {
+  const harness =
+    HARNESSES.find((h) => h.id === settings.harness)?.label ?? "no harness";
+  const host = settings.gatewayUrl
+    .replace(/^[a-z]+:\/\//i, "")
+    .replace(/\/+$/, "");
+  return host ? `${harness} · ${host}` : harness;
 }
 
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: "#0e1014",
-    paddingTop: 56,
+    backgroundColor: color.bg,
+    paddingTop: inset.top,
   },
   header: {
-    paddingHorizontal: 20,
-    paddingBottom: 12,
     flexDirection: "row",
+    alignItems: "center",
     justifyContent: "space-between",
-    alignItems: "baseline",
+    paddingHorizontal: space.xl,
+    paddingBottom: space.md,
   },
-  title: {
-    color: "#e8edf5",
-    fontSize: 22,
-    fontWeight: "700",
+  wordmark: {
+    color: color.text,
+    fontSize: font.display - 6,
+    fontWeight: "800",
+    letterSpacing: -0.5,
   },
-  status: {
-    color: "#9aa3b5",
-    fontSize: 13,
+  tagline: {
+    color: color.textDim,
+    fontSize: font.caption,
+    marginTop: 2,
   },
-  tabs: {
-    flexDirection: "row",
-    marginHorizontal: 16,
-    backgroundColor: "#181c24",
-    borderRadius: 10,
-    padding: 4,
-  },
-  tab: {
+  screen: {
     flex: 1,
-    paddingVertical: 10,
-    alignItems: "center",
-    borderRadius: 8,
+    paddingHorizontal: space.xl,
+    paddingTop: space.sm,
+    gap: space.md,
   },
-  tabActive: {
-    backgroundColor: "#2a3140",
-  },
-  tabLabel: {
-    color: "#9aa3b5",
-    fontWeight: "600",
-  },
-  tabLabelActive: {
-    color: "#e8edf5",
-  },
-  talk: {
-    flex: 1,
-    paddingHorizontal: 16,
-    paddingTop: 16,
-  },
-  modeRow: {
+  actionRow: {
     flexDirection: "row",
-    gap: 8,
+    gap: space.md,
   },
-  modeBtn: {
+  actionItem: {
     flex: 1,
-    backgroundColor: "#181c24",
-    paddingVertical: 12,
-    alignItems: "center",
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: "#181c24",
-  },
-  modeBtnActive: {
-    borderColor: "#5b8cff",
-  },
-  modeLabel: {
-    color: "#e8edf5",
-    fontWeight: "600",
-  },
-  connectBtn: {
-    marginTop: 12,
-    paddingVertical: 14,
-    borderRadius: 10,
-    alignItems: "center",
-  },
-  connectBtnOff: {
-    backgroundColor: "#2d6a4f",
-  },
-  connectBtnOn: {
-    backgroundColor: "#3d4a63",
-  },
-  connectLabel: {
-    color: "#e8edf5",
-    fontWeight: "700",
-    fontSize: 16,
-  },
-  ptt: {
-    marginTop: 16,
-    minHeight: 160,
-    borderRadius: 20,
-    backgroundColor: "#1c2433",
-    borderWidth: 2,
-    borderColor: "#3d4a63",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  pttHeld: {
-    backgroundColor: "#1e3a5f",
-    borderColor: "#5b8cff",
-  },
-  pttLabel: {
-    color: "#e8edf5",
-    fontSize: 20,
-    fontWeight: "700",
-  },
-  openMic: {
-    marginTop: 16,
-    minHeight: 120,
-    borderRadius: 20,
-    backgroundColor: "#181c24",
-    alignItems: "center",
-    justifyContent: "center",
-    flexDirection: "row",
-    gap: 10,
-  },
-  openMicLive: {
-    borderWidth: 1,
-    borderColor: "#2d6a4f",
-  },
-  micDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: "#6b7385",
-  },
-  micDotLive: {
-    backgroundColor: "#3dd68c",
-  },
-  openMicLabel: {
-    color: "#e8edf5",
-    fontSize: 18,
-    fontWeight: "600",
-  },
-  stopBtn: {
-    marginTop: 12,
-    backgroundColor: "#9b2226",
-    paddingVertical: 14,
-    borderRadius: 10,
-    alignItems: "center",
-  },
-  stopLabel: {
-    color: "#e8edf5",
-    fontWeight: "700",
-    fontSize: 16,
   },
   feed: {
     flex: 1,
-    marginTop: 16,
-    marginBottom: 16,
-    backgroundColor: "#181c24",
-    borderRadius: 12,
-    paddingHorizontal: 12,
-  },
-  eventRow: {
-    paddingVertical: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "#2a3140",
-  },
-  eventKind: {
-    fontSize: 11,
-    fontWeight: "700",
-    textTransform: "uppercase",
-    marginBottom: 2,
-  },
-  eventText: {
-    color: "#e8edf5",
-    fontSize: 15,
-    lineHeight: 20,
-  },
-  kindError: { color: "#ff6b6b" },
-  kindAgent: { color: "#7eb6ff" },
-  kindTool: { color: "#c9a227" },
-  kindUser: { color: "#3dd68c" },
-  kindMeta: { color: "#9aa3b5" },
-  empty: {
-    color: "#6b7385",
-    paddingVertical: 20,
-    textAlign: "center",
-  },
-  disabled: {
-    opacity: 0.45,
-  },
-  settingsWrap: {
-    flex: 1,
-  },
-  settings: {
-    flex: 1,
-    paddingHorizontal: 16,
-    paddingTop: 12,
+    marginTop: space.xs,
   },
   settingsContent: {
-    paddingBottom: 32,
+    paddingBottom: space.xl,
   },
-  hint: {
-    color: "#6b7385",
-    fontSize: 13,
-    lineHeight: 18,
-    marginBottom: 4,
-  },
-  section: {
-    color: "#9aa3b5",
-    fontSize: 12,
-    fontWeight: "700",
-    letterSpacing: 0.6,
-    textTransform: "uppercase",
-    marginTop: 16,
-    marginBottom: 8,
-  },
-  field: {
-    marginBottom: 10,
-  },
-  fieldLabel: {
-    color: "#9aa3b5",
-    fontSize: 13,
-    marginBottom: 6,
-  },
-  input: {
-    backgroundColor: "#181c24",
-    color: "#e8edf5",
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    fontSize: 16,
+  note: {
+    color: color.textDim,
+    fontSize: font.caption,
+    lineHeight: 17,
+    marginTop: space.md,
   },
   harnessGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 8,
-    marginBottom: 10,
+    gap: space.md,
   },
-  harnessBtn: {
-    width: "48%",
-    backgroundColor: "#181c24",
-    paddingVertical: 12,
-    borderRadius: 10,
-    alignItems: "center",
+  harnessCard: {
+    flexGrow: 1,
+    flexBasis: "46%",
+    backgroundColor: color.surface,
+    borderRadius: radius.md,
     borderWidth: 1,
-    borderColor: "#181c24",
+    borderColor: color.border,
+    paddingHorizontal: space.md,
+    paddingVertical: space.md,
   },
-  harnessBtnActive: {
-    borderColor: "#5b8cff",
+  harnessCardActive: {
+    borderColor: color.accent,
+    backgroundColor: color.accentTint,
+  },
+  harnessTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: space.sm,
   },
   harnessLabel: {
-    color: "#e8edf5",
+    color: color.textMuted,
+    fontSize: font.label,
+    fontWeight: "700",
+  },
+  harnessLabelActive: {
+    color: color.text,
+  },
+  harnessEnv: {
+    color: color.textDim,
+    fontSize: font.micro - 1,
+    marginTop: 3,
+    letterSpacing: 0.3,
+  },
+  saveBar: {
+    paddingTop: space.md,
+    borderTopWidth: 1,
+    borderTopColor: color.border,
+  },
+  tabBar: {
+    flexDirection: "row",
+    borderTopWidth: 1,
+    borderTopColor: color.border,
+    backgroundColor: color.bgElevated,
+    paddingTop: space.md,
+    paddingBottom: inset.bottom,
+    paddingHorizontal: space.lg,
+  },
+  tabItem: {
+    flex: 1,
+    alignItems: "center",
+    gap: 5,
+  },
+  tabLabel: {
+    color: color.textDim,
+    fontSize: font.micro,
     fontWeight: "600",
   },
-  actionBtn: {
-    backgroundColor: "#2a3140",
-    paddingVertical: 14,
-    borderRadius: 10,
-    alignItems: "center",
-    marginTop: 8,
-    marginBottom: 8,
-  },
-  actionLabel: {
-    color: "#e8edf5",
-    fontWeight: "700",
-  },
-  toast: {
-    marginHorizontal: 16,
-    marginTop: 10,
-    borderRadius: 10,
-    borderWidth: 1,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-  },
-  toastOk: {
-    backgroundColor: "#123326",
-    borderColor: "#3dd68c",
-  },
-  toastErr: {
-    backgroundColor: "#3a1b20",
-    borderColor: "#ff6b6b",
-  },
-  toastText: {
-    color: "#f4f7fb",
-    fontSize: 14,
-    fontWeight: "700",
+  tabLabelActive: {
+    color: color.accent,
   },
 });
