@@ -59,14 +59,22 @@ export function connectionError(conn: Connection): string | null {
   return null;
 }
 
-export function voiceUrl(conn: Connection, mode: VoiceMode): string {
+export function voiceUrl(
+  conn: Connection,
+  mode: VoiceMode,
+  options: { focused?: boolean; afterEventId?: number } = {},
+): string {
   const ws = httpToWs(conn.gatewayUrl);
   if (!ws) throw new Error("invalid gateway URL");
   const q = new URLSearchParams({
     token: conn.token,
     userId: conn.userId,
     mode,
+    focused: String(options.focused ?? true),
   });
+  if (options.afterEventId !== undefined) {
+    q.set("afterEventId", String(options.afterEventId));
+  }
   return `${ws}/v1/voice?${q.toString()}`;
 }
 

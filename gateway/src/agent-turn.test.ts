@@ -102,6 +102,7 @@ describe("AgentTurn", () => {
   it("runs two queued prompts once each and in order", async () => {
     const { box, events, turn } = setup();
     turn.enqueue("one");
+    assert.equal(turn.activity, "working");
     turn.enqueue("two");
     const [a, b] = box.prompts();
     assert.equal(box.prompts().length, 1);
@@ -119,6 +120,7 @@ describe("AgentTurn", () => {
 
     const id2 = box.prompts()[1].id;
     box.emit({ type: "done", promptId: id2 });
+    assert.equal(turn.activity, "idle");
 
     const starts = events.filter((e) => e.type === "prompt_start");
     const dones = events.filter((e) => e.type === "done");
@@ -232,6 +234,56 @@ describe("AgentTurn", () => {
     assert.equal(audio.length, audioBefore);
     assert.equal(events.some((e) => e.type === "tts_start"), true);
     assert.equal(events.some((e) => e.type === "tts_end"), false);
+    await turn.close();
+  });
+
+  it("stops TTS while unfocused and resumes it for later text", async () => {
+    const streams: Array<{ closed: boolean; texts: string[] }> = [];
+    const factory: OpenTts = (opts) => {
+      const stream = { closed: false, texts: [] as string[] };
+      streams.push(stream);
+      return {
+        pushText(text) {
+          if (stream.closed) return;
+          stream.texts.push(text);
+          opts.onAudio(Buffer.from(text));
+        },
+        finish() {
+          opts.onEnd?.();
+        },
+        close() {
+          stream.closed = true;
+        },
+      };
+    };
+    const { box, events, audio, turn } = setup(factory);
+    turn.enqueue("work");
+    const id = box.prompts()[0].id;
+
+    box.emit({ type: "chunk", promptId: id, text: "First sentence. " });
+    assert.equal(streams.length, 1);
+    assert.equal(audio.length, 1);
+
+    turn.setSpeechEnabled(false);
+    assert.equal(streams[0].closed, true);
+    assert.equal(events.filter((e) => e.type === "tts_end").length, 1);
+
+    box.emit({ type: "chunk", promptId: id, text: "Background sentence. " });
+    assert.equal(streams.length, 1);
+    assert.equal(audio.length, 1);
+
+    turn.setSpeechEnabled(true);
+    box.emit({ type: "chunk", promptId: id, text: "Focused again. " });
+    assert.equal(streams.length, 2);
+    assert.equal(audio.length, 2);
+    assert.deepEqual(
+      events.filter((e) => e.type === "agent_text").map((e) =>
+        e.type === "agent_text" ? e.text : "",
+      ),
+      ["First sentence. ", "Background sentence. ", "Focused again. "],
+    );
+
+    box.emit({ type: "done", promptId: id });
     await turn.close();
   });
 

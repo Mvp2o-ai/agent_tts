@@ -20,6 +20,12 @@ import {
   type SpeakingState,
 } from "./session-lifecycle";
 import {
+  MAX_TRANSCRIPT_EVENTS,
+  type EventKind,
+  type SessionEvent,
+} from "./session-transcript";
+import { transcriptStore } from "./transcript-store";
+import {
   enqueueNativePlayback,
   flushNativePlayback,
   prepareVoiceNative,
@@ -31,27 +37,11 @@ import {
 } from "./voice-native";
 
 export type { VoiceMode, SessionStatus };
-export type EventKind =
-  | "transcript"
-  | "agent"
-  | "tool"
-  | "error"
-  | "ready"
-  | "queued"
-  | "prompt"
-  | "stopped"
-  | "done"
-  | "barge_in"
-  | "partial";
-
-export interface SessionEvent {
-  id: number;
-  kind: EventKind;
-  text: string;
-}
+export type { EventKind, SessionEvent };
 
 const CONNECT_TIMEOUT_MS = 20_000;
-const MAX_EVENTS = 200;
+let nextConnectionGeneration = 0;
+let audioOwnerProfileId: string | null = null;
 
 type ServerEvent = {
   type?: string;
@@ -65,16 +55,32 @@ type ServerEvent = {
   position?: number;
   reason?: string;
   audioFormat?: unknown;
+  eventId?: number;
+  generationId?: string;
+  oldestEventId?: number;
+  lastEventId?: number;
+  sessionState?: "idle" | "working" | "speaking";
 };
 
 function isBlob(data: unknown): data is Blob {
   return typeof Blob !== "undefined" && data instanceof Blob;
 }
 
-export function useVoiceSession(conn: Connection): {
+function beginUniqueConnect(state: SessionGeneration): SessionGeneration {
+  const next = beginConnect(state);
+  return { ...next, generation: ++nextConnectionGeneration };
+}
+
+export function useVoiceSession(
+  conn: Connection,
+  options: { profileId: string; focused: boolean },
+): {
   status: SessionStatus;
   events: SessionEvent[];
   speaking: boolean;
+  working: boolean;
+  harness: string;
+  generationId: string;
   connect: (mode: VoiceMode) => void;
   disconnect: () => void;
   pttStart: () => void;
@@ -84,9 +90,18 @@ export function useVoiceSession(conn: Connection): {
   const [status, setStatus] = useState<SessionStatus>("disconnected");
   const [events, setEvents] = useState<SessionEvent[]>([]);
   const [speaking, setSpeaking] = useState(false);
+  const [working, setWorking] = useState(false);
+  const [harness, setHarness] = useState("");
+  const [generationId, setGenerationId] = useState("");
+  const [lastEventId, setLastEventId] = useState(0);
+  const [transcriptHydrated, setTranscriptHydrated] = useState(false);
 
   const connRef = useRef(conn);
   connRef.current = conn;
+  const focusedRef = useRef(options.focused);
+  focusedRef.current = options.focused;
+  const profileIdRef = useRef(options.profileId);
+  profileIdRef.current = options.profileId;
 
   const wsRef = useRef<WebSocket | null>(null);
   const modeRef = useRef<VoiceMode>("ptt");
@@ -104,6 +119,44 @@ export function useVoiceSession(conn: Connection): {
   const connectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
   const eventIdRef = useRef(0);
+  const generationIdRef = useRef("");
+  const lastEventIdRef = useRef(0);
+
+  useEffect(() => {
+    let current = true;
+    setTranscriptHydrated(false);
+    void transcriptStore.load(options.profileId).then((saved) => {
+      if (!current) return;
+      generationIdRef.current = saved.generationId;
+      lastEventIdRef.current = saved.lastEventId;
+      eventIdRef.current = saved.events.reduce(
+        (max, event) => Math.max(max, event.id),
+        0,
+      );
+      setGenerationId(saved.generationId);
+      setLastEventId(saved.lastEventId);
+      setEvents(saved.events);
+      setTranscriptHydrated(true);
+    });
+    return () => {
+      current = false;
+    };
+  }, [options.profileId]);
+
+  useEffect(() => {
+    if (!transcriptHydrated) return;
+    void transcriptStore.save(options.profileId, {
+      generationId,
+      lastEventId,
+      events,
+    });
+  }, [
+    events,
+    generationId,
+    lastEventId,
+    options.profileId,
+    transcriptHydrated,
+  ]);
 
   const setStatusSafe = useCallback((next: SessionStatus) => {
     statusRef.current = next;
@@ -124,7 +177,9 @@ export function useVoiceSession(conn: Connection): {
     const id = ++eventIdRef.current;
     setEvents((prev) => {
       const next = [...prev, { id, kind, text }];
-      return next.length > MAX_EVENTS ? next.slice(-MAX_EVENTS) : next;
+      return next.length > MAX_TRANSCRIPT_EVENTS
+        ? next.slice(-MAX_TRANSCRIPT_EVENTS)
+        : next;
     });
   }, []);
 
@@ -139,7 +194,9 @@ export function useVoiceSession(conn: Connection): {
         text,
       };
       const next = [...withoutPartial, row];
-      return next.length > MAX_EVENTS ? next.slice(-MAX_EVENTS) : next;
+      return next.length > MAX_TRANSCRIPT_EVENTS
+        ? next.slice(-MAX_TRANSCRIPT_EVENTS)
+        : next;
     });
   }, []);
 
@@ -150,6 +207,7 @@ export function useVoiceSession(conn: Connection): {
   }, []);
 
   const flushPlayback = useCallback(async () => {
+    if (audioOwnerProfileId !== profileIdRef.current) return;
     applySpeaking("flush");
     try {
       await flushNativePlayback();
@@ -157,6 +215,16 @@ export function useVoiceSession(conn: Connection): {
       // already released
     }
   }, [applySpeaking]);
+
+  const releaseOwnedVoice = useCallback(async () => {
+    if (audioOwnerProfileId !== profileIdRef.current) return;
+    audioOwnerProfileId = null;
+    try {
+      await releaseVoiceNative();
+    } catch {
+      // already released
+    }
+  }, []);
 
   const clearTimers = useCallback(() => {
     if (reconnectTimerRef.current) {
@@ -201,7 +269,7 @@ export function useVoiceSession(conn: Connection): {
       stopMic();
       closeSocket();
       void flushPlayback();
-      void releaseVoiceNative();
+      void releaseOwnedVoice();
       pushEvent("error", message);
       setStatusSafe("disconnected");
     },
@@ -211,6 +279,8 @@ export function useVoiceSession(conn: Connection): {
 
   startMicRef.current = (generation: number) => {
     if (micOpenRef.current) return;
+    if (!focusedRef.current) return;
+    if (audioOwnerProfileId !== profileIdRef.current) return;
     if (!shouldAcceptNativeEvent(sessionGenRef.current, generation)) return;
     micOpenRef.current = true;
     void startNativeCapture(generation).catch((err) => {
@@ -233,6 +303,14 @@ export function useVoiceSession(conn: Connection): {
       } catch {
         return;
       }
+      if (
+        typeof msg.eventId === "number" &&
+        Number.isSafeInteger(msg.eventId) &&
+        msg.eventId > lastEventIdRef.current
+      ) {
+        lastEventIdRef.current = msg.eventId;
+        setLastEventId(msg.eventId);
+      }
       switch (msg.type) {
         case "ready": {
           playbackAllowedRef.current = false;
@@ -241,6 +319,24 @@ export function useVoiceSession(conn: Connection): {
             failClosed(formatErr);
             return;
           }
+          if (msg.generationId) {
+            const changed =
+              generationIdRef.current !== "" &&
+              generationIdRef.current !== msg.generationId;
+            generationIdRef.current = msg.generationId;
+            setGenerationId(msg.generationId);
+            if (changed) {
+              eventIdRef.current = 0;
+              lastEventIdRef.current = 0;
+              setLastEventId(0);
+              setEvents([]);
+              setWorking(false);
+            }
+          }
+          if (msg.harness) setHarness(msg.harness);
+          setWorking(
+            msg.sessionState === "working" || msg.sessionState === "speaking",
+          );
           reconnectAttemptRef.current = 0;
           if (connectTimerRef.current) {
             clearTimeout(connectTimerRef.current);
@@ -251,7 +347,7 @@ export function useVoiceSession(conn: Connection): {
             "ready",
             `connected (${msg.mode ?? modeRef.current}${msg.harness ? `, ${msg.harness}` : ""})`,
           );
-          if (modeRef.current === "handsfree") {
+          if (modeRef.current === "handsfree" && focusedRef.current) {
             startMicRef.current(sessionGenRef.current.generation);
           }
           break;
@@ -272,6 +368,7 @@ export function useVoiceSession(conn: Connection): {
           );
           break;
         case "prompt_start":
+          setWorking(true);
           pushEvent("prompt", msg.text ?? msg.promptId ?? "");
           break;
         case "tts_start":
@@ -289,10 +386,12 @@ export function useVoiceSession(conn: Connection): {
           break;
         case "stopped":
           playbackAllowedRef.current = false;
+          setWorking(false);
           pushEvent("stopped", msg.reason ?? "stopped");
           void flushPlayback();
           break;
         case "done":
+          setWorking(false);
           pushEvent("done", msg.promptId ?? "done");
           break;
         case "error":
@@ -319,6 +418,8 @@ export function useVoiceSession(conn: Connection): {
         return;
       }
       if (frame.kind !== "audio") return;
+      if (!focusedRef.current) return;
+      if (audioOwnerProfileId !== profileIdRef.current) return;
       if (!shouldAcceptNativeEvent(sessionGenRef.current, generation)) return;
       if (!playbackAllowedRef.current) return;
       applySpeaking("playback_busy");
@@ -345,7 +446,12 @@ export function useVoiceSession(conn: Connection): {
 
       let ws: WebSocket;
       try {
-        ws = new WebSocket(voiceUrl(current, mode));
+        ws = new WebSocket(
+          voiceUrl(current, mode, {
+            focused: focusedRef.current,
+            afterEventId: lastEventIdRef.current,
+          }),
+        );
       } catch (cause) {
         failClosed(
           cause instanceof Error ? cause.message : "failed to open websocket",
@@ -396,7 +502,7 @@ export function useVoiceSession(conn: Connection): {
 
         const message = wsCloseMessage(event.code, event.reason ?? "");
         if (sessionGenRef.current.userClosed) {
-          void releaseVoiceNative();
+          void releaseOwnedVoice();
           setStatusSafe("disconnected");
           return;
         }
@@ -408,7 +514,7 @@ export function useVoiceSession(conn: Connection): {
         });
         if (delay == null) {
           sessionGenRef.current = beginDisconnect(sessionGenRef.current);
-          void releaseVoiceNative();
+          void releaseOwnedVoice();
           pushEvent("error", message);
           setStatusSafe("disconnected");
           return;
@@ -423,11 +529,15 @@ export function useVoiceSession(conn: Connection): {
         reconnectTimerRef.current = setTimeout(() => {
           if (sessionGenRef.current.userClosed) return;
           if (sessionGenRef.current.generation !== generation) return;
-          sessionGenRef.current = beginConnect(sessionGenRef.current);
+          sessionGenRef.current = beginUniqueConnect(sessionGenRef.current);
           const nextGen = sessionGenRef.current.generation;
-          void releaseVoiceNative()
+          void releaseOwnedVoice()
             .catch(() => undefined)
-            .then(() => prepareVoiceNative(nextGen, modeRef.current))
+            .then(() => {
+              if (!focusedRef.current) return null;
+              audioOwnerProfileId = profileIdRef.current;
+              return prepareVoiceNative(nextGen, modeRef.current);
+            })
             .then(() => {
               if (!shouldAcceptNativeEvent(sessionGenRef.current, nextGen)) {
                 return;
@@ -463,13 +573,13 @@ export function useVoiceSession(conn: Connection): {
     stopMic();
     closeSocket();
     void flushPlayback();
-    void releaseVoiceNative();
+    void releaseOwnedVoice();
     setStatusSafe("disconnected");
   }, [clearTimers, closeSocket, flushPlayback, setStatusSafe, stopMic]);
 
   const connect = useCallback(
     (mode: VoiceMode) => {
-      sessionGenRef.current = beginConnect(sessionGenRef.current);
+      sessionGenRef.current = beginUniqueConnect(sessionGenRef.current);
       const generation = sessionGenRef.current.generation;
       reconnectAttemptRef.current = 0;
       modeRef.current = mode;
@@ -479,10 +589,14 @@ export function useVoiceSession(conn: Connection): {
       stopMic();
       closeSocket();
       void flushPlayback();
-      setEvents([]);
       setStatusSafe("connecting");
 
       const run = async () => {
+        if (!focusedRef.current) {
+          openSocket(generation, mode);
+          return;
+        }
+        audioOwnerProfileId = profileIdRef.current;
         try {
           const perm = await requestVoicePermissions();
           if (!shouldAcceptNativeEvent(sessionGenRef.current, generation)) {
@@ -547,6 +661,8 @@ export function useVoiceSession(conn: Connection): {
 
   const pttStart = useCallback(() => {
     if (modeRef.current !== "ptt") return;
+    if (!focusedRef.current) return;
+    if (audioOwnerProfileId !== profileIdRef.current) return;
     if (statusRef.current !== "ready") return;
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
@@ -579,9 +695,61 @@ export function useVoiceSession(conn: Connection): {
   }, [flushPlayback]);
 
   useEffect(() => {
+    const ws = wsRef.current;
+    if (!options.focused) {
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "focus", focused: false }));
+      }
+      pttHeldRef.current = false;
+      playbackAllowedRef.current = false;
+      stopMic();
+      void flushPlayback();
+      void releaseOwnedVoice();
+      applySpeaking("flush");
+      return;
+    }
+
+    if (statusRef.current !== "ready") return;
+    const timer = setTimeout(() => {
+      if (!focusedRef.current || statusRef.current !== "ready") return;
+      const generation = sessionGenRef.current.generation;
+      audioOwnerProfileId = profileIdRef.current;
+      void prepareVoiceNative(generation, modeRef.current)
+        .then(() => {
+          if (!focusedRef.current) return;
+          const currentWs = wsRef.current;
+          if (currentWs?.readyState === WebSocket.OPEN) {
+            currentWs.send(JSON.stringify({ type: "focus", focused: true }));
+          }
+          if (modeRef.current === "handsfree") {
+            startMicRef.current(generation);
+          }
+        })
+        .catch((err) => {
+          pushEvent(
+            "error",
+            err instanceof Error
+              ? err.message
+              : "native audio failed to prepare",
+          );
+        });
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [
+    applySpeaking,
+    flushPlayback,
+    options.focused,
+    pushEvent,
+    releaseOwnedVoice,
+    stopMic,
+  ]);
+
+  useEffect(() => {
     mountedRef.current = true;
     const unsubscribe = subscribeVoiceNative({
       onCapture: (generation, pcm) => {
+        if (!focusedRef.current) return;
+        if (audioOwnerProfileId !== profileIdRef.current) return;
         if (!shouldAcceptNativeEvent(sessionGenRef.current, generation)) return;
         if (!micOpenRef.current) return;
         const ws = wsRef.current;
@@ -593,14 +761,17 @@ export function useVoiceSession(conn: Connection): {
         }
       },
       onPlaybackIdle: (generation) => {
+        if (audioOwnerProfileId !== profileIdRef.current) return;
         if (!shouldAcceptNativeEvent(sessionGenRef.current, generation)) return;
         applySpeaking("playback_idle");
       },
       onWarning: (generation, message) => {
+        if (audioOwnerProfileId !== profileIdRef.current) return;
         if (!shouldAcceptNativeEvent(sessionGenRef.current, generation)) return;
         pushEvent("error", message);
       },
       onError: (generation, message) => {
+        if (audioOwnerProfileId !== profileIdRef.current) return;
         if (!shouldAcceptNativeEvent(sessionGenRef.current, generation)) return;
         pushEvent("error", message);
         void flushPlayback();
@@ -621,7 +792,7 @@ export function useVoiceSession(conn: Connection): {
       stopMic();
       closeSocket();
       void flushPlayback();
-      void releaseVoiceNative();
+      void releaseOwnedVoice();
     };
   }, [
     applySpeaking,
@@ -637,6 +808,9 @@ export function useVoiceSession(conn: Connection): {
     status,
     events,
     speaking,
+    working,
+    harness,
+    generationId,
     connect,
     disconnect,
     pttStart,

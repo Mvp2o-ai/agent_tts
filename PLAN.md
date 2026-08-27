@@ -22,8 +22,11 @@ agent container (one per agent identity; operator deploys it anywhere)
         └─ harness: claude-code | cursor-cli | gemini-cli | codex, cwd = /workspace (empty; agent clones)
 ```
 
-The mobile app stores multiple agent endpoints (URL + token) and switches
-between them. Two agents = two deployments, even if both run Claude.
+The mobile app stores multiple agent endpoints (URL + token), keeps active
+sessions connected concurrently, and switches microphone/speaker focus between
+them. Unfocused sessions continue text-only. A reconnect reattaches to the same
+harness turn and replays missed events. Two agents = two deployments, even if
+both run Claude.
 
 ## Container lifecycle
 
@@ -47,6 +50,7 @@ between them. Two agents = two deployments, even if both run Claude.
 5. **One agent per container.** The image ships all four harness CLIs, but container config binds exactly one agent identity and one harness. Never two agent processes in one container. Adding a harness = adding an adapter, no mobile/gateway changes.
 6. **Config lives in SQLite.** Per-user config (git PAT, optional git host, harness choice, model keys, stop word, voice) is stored in a SQLite file (Node's built-in driver, no server) and editable from the mobile app in real time. Bring your own persistence volume. No baked-in config.
 7. **Repo access.** Gateway injects git/gh credentials into the container at session start. The adapter does not clone. The harness clones, checks out PRs, and opens PRs.
+8. **Device-side session identity.** Each agent has a renameable local project name, a transcript keyed by profile and container generation, and selectable PAT/model-key references backed by native secure storage.
 
 ## Stack decisions
 

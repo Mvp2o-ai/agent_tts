@@ -25,6 +25,18 @@ describe("protocol", () => {
     assert.match(url, /^ws:\/\/10\.0\.0\.12:8787\/v1\/voice\?/);
     assert.match(url, /mode=ptt/);
     assert.match(url, /userId=ken/);
+    assert.match(url, /focused=true/);
+    const backgroundUrl = voiceUrl(
+      {
+        gatewayUrl: "https://gw.example",
+        token: "t",
+        userId: "ken",
+      },
+      "handsfree",
+      { focused: false, afterEventId: 23 },
+    );
+    assert.match(backgroundUrl, /focused=false/);
+    assert.match(backgroundUrl, /afterEventId=23/);
     assert.equal(
       killSessionUrl({
         gatewayUrl: "https://gw.example",

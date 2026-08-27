@@ -15,7 +15,8 @@ You speak into your phone. A harness (Claude Code, Cursor CLI, Gemini CLI, or Co
 - **Prompt queue**: talk while the harness is mid-turn; it runs next
 - **Stop word** (default `hard stop`): transcript match aborts the in-flight harness turn
 - **One image, one agent per deployed container**: gateway + adapter + harness CLIs in the same image; the adapter runs as a non-root child process
-- **Multiple agents in the app**: register several container endpoints (URL + token) and switch between them
+- **Multiple live agents in the app**: keep several container endpoints connected, switch focus without stopping background work, and retain a transcript per agent
+- **Device credential library**: save PATs and model keys once in native secure storage, then select them for any agent
 - **SQLite** persistence — a single file on a volume, no database server
 - **Native Expo (React Native) app** — iOS + Android, TestFlight / signed-APK sideload, intentionally not the app stores
 
@@ -37,8 +38,12 @@ agent container (one per agent identity; operator deploys it anywhere)
         └─ harness: claude-code | cursor-cli | gemini-cli | codex, cwd = /workspace (empty; agent clones)
 ```
 
-The mobile app stores multiple agent endpoints (URL + token) and switches
-between them. Two agents = two deployments, even if both run Claude.
+The mobile app stores multiple agent endpoints (URL + token) and can keep their
+voice sockets live concurrently. Only the focused agent owns the microphone and
+speaker; background agents continue as text-only, avoiding unused TTS charges.
+A dropped socket does not abort the harness turn: reconnect reattaches to the
+same adapter and replays missed text events. Two agents = two deployments, even
+if both run Claude.
 
 ### Container lifecycle
 
@@ -67,7 +72,13 @@ npm install
 npx expo run:ios      # or run:android — dev client, not Expo Go
 ```
 
-Everything is configured in-app (Settings tab): one or more agents (name, gateway URL, token), git PAT, optional git host, harness, that harness's API key, stop word, voice. Connection fields stay on the device. Per-agent config is stored by that agent’s gateway in SQLite. Switch agents from the Settings list; the Talk tab shows the active agent’s name.
+Everything is configured in-app (Settings tab): one or more agents (project name, gateway URL, token), git PAT, optional git host, harness, that harness's API key, stop word, voice. PATs and model keys are kept in the phone's native secure storage and can be selected for multiple agents; raw values are not written to AsyncStorage. Per-agent config is stored by that agent’s gateway in SQLite.
+
+The Talk screen's session switcher defaults to names such as `Claude · Project
+1` and shows each agent's live state. Switching changes microphone/speaker
+focus without disconnecting the other agents. Each profile has an independently
+persisted transcript; the app appends across reconnects and clears only the
+affected transcript when that container reports a new generation.
 
 The image includes `git` and `gh`. The gateway injects a host-scoped PAT and **does not clone**. Tell the agent which remotes to clone (one or many). Public HTTPS clones work with an empty PAT. For private repos or `git push` / PRs, use a **fine-grained GitHub PAT** for those repos: Contents + Pull requests (read/write), short expiry, no admin/workflow scopes. There is no GitHub permission that is “PRs only” while still allowing a branch push. Do not use SSH remotes; there is no `ssh-agent` in the container.
 

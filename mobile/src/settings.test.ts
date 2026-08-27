@@ -10,7 +10,7 @@ import {
 } from "./settings";
 
 describe("device settings", () => {
-  it("round-trips fields including secrets without dropping keys", () => {
+  it("round-trips credential references without persisting raw secrets", () => {
     const settings = {
       ...DEFAULT_DEVICE_SETTINGS,
       agents: [
@@ -19,6 +19,8 @@ describe("device settings", () => {
           name: "Agent 1",
           gatewayUrl: "http://10.0.0.8:4100",
           token: "gateway-token",
+          gitCredentialId: "git-1",
+          modelCredentialIds: { ANTHROPIC_API_KEY: "model-1" },
         },
       ],
       activeAgentId: "agent-1",
@@ -29,9 +31,14 @@ describe("device settings", () => {
     const parsed = parseDeviceSettings(serializeDeviceSettings(settings));
     assert.equal(activeAgent(parsed).token, "gateway-token");
     assert.equal(activeAgent(parsed).gatewayUrl, "http://10.0.0.8:4100");
-    assert.equal(parsed.gitPat, "ghp_example");
+    assert.equal(parsed.gitPat, "");
     assert.equal(parsed.harness, "gemini-cli");
-    assert.equal(parsed.modelKeys.ANTHROPIC_API_KEY, "sk-ant-example");
+    assert.equal(parsed.modelKeys.ANTHROPIC_API_KEY, undefined);
+    assert.equal(activeAgent(parsed).gitCredentialId, "git-1");
+    assert.equal(
+      activeAgent(parsed).modelCredentialIds?.ANTHROPIC_API_KEY,
+      "model-1",
+    );
   });
 
   it("falls back on corrupt JSON and unknown harnesses", () => {
@@ -42,7 +49,7 @@ describe("device settings", () => {
     );
   });
 
-  it("migrates legacy v1 gatewayUrl/token into a single Agent 1 profile", () => {
+  it("migrates legacy v1 gatewayUrl/token into a single Project 1 profile", () => {
     const parsed = parseDeviceSettings(
       JSON.stringify({
         gatewayUrl: "http://10.0.0.8:4100",
@@ -54,7 +61,7 @@ describe("device settings", () => {
     );
     assert.equal(parsed.agents.length, 1);
     assert.equal(parsed.agents[0]?.id, "agent-1");
-    assert.equal(parsed.agents[0]?.name, "Agent 1");
+    assert.equal(parsed.agents[0]?.name, "Project 1");
     assert.equal(parsed.agents[0]?.gatewayUrl, "http://10.0.0.8:4100");
     assert.equal(parsed.agents[0]?.token, "legacy-token");
     assert.equal(parsed.activeAgentId, "agent-1");
@@ -69,6 +76,8 @@ describe("device settings", () => {
     >;
     assert.equal("gatewayUrl" in serialized, false);
     assert.equal("token" in serialized, false);
+    assert.equal("gitPat" in serialized, false);
+    assert.equal("modelKeys" in serialized, false);
     assert.ok(Array.isArray(serialized.agents));
     assert.equal(serialized.activeAgentId, "agent-1");
   });

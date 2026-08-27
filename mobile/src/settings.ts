@@ -14,6 +14,8 @@ export interface AgentProfile {
   name: string;
   gatewayUrl: string;
   token: string;
+  gitCredentialId?: string;
+  modelCredentialIds?: Record<string, string>;
 }
 
 export interface DeviceSettings {
@@ -33,7 +35,7 @@ export const SETTINGS_STORAGE_KEY = "agent_tts.deviceSettings.v1";
 
 export const DEFAULT_DEVICE_SETTINGS: DeviceSettings = {
   agents: [
-    { id: "agent-1", name: "Agent 1", gatewayUrl: "http://", token: "" },
+    { id: "agent-1", name: "Project 1", gatewayUrl: "http://", token: "" },
   ],
   activeAgentId: "agent-1",
   userId: "default",
@@ -83,6 +85,12 @@ function parseAgentProfile(value: unknown): AgentProfile | null {
     name: o.name,
     gatewayUrl: o.gatewayUrl,
     token: o.token,
+    ...(typeof o.gitCredentialId === "string"
+      ? { gitCredentialId: o.gitCredentialId }
+      : {}),
+    ...(o.modelCredentialIds && typeof o.modelCredentialIds === "object"
+      ? { modelCredentialIds: asModelKeys(o.modelCredentialIds) }
+      : {}),
   };
 }
 
@@ -97,7 +105,7 @@ function resolveAgents(o: Record<string, unknown>): AgentProfile[] {
     return [
       {
         id: "agent-1",
-        name: "Agent 1",
+        name: "Project 1",
         gatewayUrl: o.gatewayUrl,
         token: o.token,
       },
@@ -153,10 +161,8 @@ export function serializeDeviceSettings(settings: DeviceSettings): string {
     activeAgentId: settings.activeAgentId,
     userId: settings.userId,
     repoUrl: settings.repoUrl,
-    gitPat: settings.gitPat,
     defaultBranch: settings.defaultBranch,
     harness: settings.harness,
-    modelKeys: settings.modelKeys,
     stopWord: settings.stopWord,
     voiceId: settings.voiceId,
   });

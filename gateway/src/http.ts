@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { randomUUID } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { ConfigStore } from "./config-store.js";
 import type { UserConfig } from "./config-schema.js";
@@ -8,6 +9,7 @@ import { harnessEnv } from "./harness-env.js";
 import { AgentTurn, type VoiceSink } from "./agent-turn.js";
 import { openDeepgram, type SttStream } from "./deepgram.js";
 import { VOICE_AUDIO_FORMAT } from "./elevenlabs.js";
+import { SessionSink } from "./session-sink.js";
 import { VoiceInput } from "./voice-input.js";
 
 /** Headless API. The only client is the mobile app. */
@@ -25,13 +27,30 @@ export interface GatewayOptions {
    * the process so the platform recreates the container from the image.
    */
   onReset?: () => void;
+  /** Stable for this process lifetime; injectable for protocol tests. */
+  generationId?: string;
+}
+
+interface VoiceAttachment {
+  ws: WebSocket;
+  input: VoiceInput;
+  mode: "ptt" | "handsfree";
+  focused: boolean;
+  stt?: SttStream;
+}
+
+export interface VoiceSession {
+  userId: string;
+  config: UserConfig;
+  turn: AgentTurn;
+  sink: SessionSink;
+  attachment?: VoiceAttachment;
 }
 
 export function createGateway(opts: GatewayOptions) {
-  const sessions = new Map<
-    WebSocket,
-    { turn: AgentTurn; stt?: SttStream; userId: string }
-  >();
+  const generationId = opts.generationId ?? randomUUID();
+  const sessions = new Map<string, VoiceSession>();
+  const pendingSessions = new Map<string, Promise<VoiceSession>>();
 
   const server = createServer((req, res) => {
     void handleHttp(req, res, opts, sessions);
@@ -39,17 +58,24 @@ export function createGateway(opts: GatewayOptions) {
 
   const wss = new WebSocketServer({ server, path: "/v1/voice" });
   wss.on("connection", (ws, req) => {
-    void handleVoice(ws, req, opts, sessions);
+    void handleVoice(
+      ws,
+      req,
+      opts,
+      sessions,
+      pendingSessions,
+      generationId,
+    );
   });
 
-  return { server, wss, sessions };
+  return { server, wss, sessions, generationId };
 }
 
 async function handleHttp(
   req: IncomingMessage,
   res: ServerResponse,
   opts: GatewayOptions,
-  sessions: Map<WebSocket, { turn: AgentTurn; stt?: SttStream; userId: string }>,
+  sessions: Map<string, VoiceSession>,
 ): Promise<void> {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
 
@@ -102,16 +128,10 @@ async function handleHttp(
       json(res, 401, { error: "unauthorized" });
       return;
     }
-    for (const [ws, session] of sessions) {
-      session.stt?.close();
-      await session.turn.close();
-      sessions.delete(ws);
-      try {
-        ws.close(4000, "reset");
-      } catch {
-        /* already closed */
-      }
+    for (const session of sessions.values()) {
+      await closeVoiceSession(session, 4000, "reset");
     }
+    sessions.clear();
     json(res, 200, { ok: true, restarting: Boolean(opts.onReset) });
     res.once("close", () => opts.onReset?.());
     return;
@@ -188,7 +208,9 @@ async function handleVoice(
   ws: WebSocket,
   req: IncomingMessage,
   opts: GatewayOptions,
-  sessions: Map<WebSocket, { turn: AgentTurn; stt?: SttStream; userId: string }>,
+  sessions: Map<string, VoiceSession>,
+  pendingSessions: Map<string, Promise<VoiceSession>>,
+  generationId: string,
 ): Promise<void> {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   if (!authorize(req, opts.token, url)) {
@@ -198,7 +220,8 @@ async function handleVoice(
 
   const userId = url.searchParams.get("userId") || "default";
   const mode = url.searchParams.get("mode") === "handsfree" ? "handsfree" : "ptt";
-  const config = await opts.store.get(userId);
+  const focused = url.searchParams.get("focused") !== "false";
+  const afterEventId = parseEventCursor(url.searchParams.get("afterEventId"));
   if (!opts.deepgramKey) {
     ws.send(
       JSON.stringify({
@@ -210,9 +233,14 @@ async function handleVoice(
     return;
   }
 
-  let box: BoxConnection;
+  let session: VoiceSession;
   try {
-    box = openBox(opts, config);
+    session = await getOrCreateVoiceSession(
+      userId,
+      opts,
+      sessions,
+      pendingSessions,
+    );
   } catch (err) {
     ws.send(
       JSON.stringify({
@@ -224,98 +252,169 @@ async function handleVoice(
     return;
   }
 
-  const sink: VoiceSink = {
-    sendJson(event) {
-      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(event));
-    },
-    sendAudio(pcm) {
-      if (ws.readyState === ws.OPEN) ws.send(pcm);
-    },
-  };
+  const previous = session.attachment;
+  if (previous) {
+    previous.stt?.close();
+    try {
+      previous.ws.close(4001, "replaced by reconnect");
+    } catch {
+      /* already closed */
+    }
+  }
 
-  const turn = new AgentTurn(box, sink, config, opts.elevenKey);
   const input = new VoiceInput(
-    turn,
+    session.turn,
     mode,
-    config.voice.stopWord || "hard stop",
-    sink,
+    session.config.voice.stopWord || "hard stop",
+    session.sink,
   );
-  let stt: SttStream | undefined;
+  const attachment: VoiceAttachment = { ws, input, mode, focused };
+  session.attachment = attachment;
+  session.sink.attach(ws, focused);
+  session.turn.setSpeechEnabled(focused);
 
   const attachStt = () => {
-    stt?.close();
-    stt = openDeepgram({
+    attachment.stt?.close();
+    attachment.stt = openDeepgram({
       apiKey: opts.deepgramKey!,
-      onError: (err) => sink.sendJson({ type: "error", message: err.message }),
+      onError: (err) =>
+        session.sink.sendJson({ type: "error", message: err.message }),
       onEvent: (ev) => input.onStt(ev),
     });
   };
 
-  if (mode === "handsfree") attachStt();
+  if (mode === "handsfree" && focused) attachStt();
 
-  sessions.set(ws, { turn, stt, userId });
   ws.send(
     JSON.stringify({
       type: "ready",
       mode,
-      harness: config.harness,
+      harness: session.config.harness,
+      generationId,
+      focused,
+      sessionState: session.turn.activity,
+      oldestEventId: session.sink.oldestEventId,
+      lastEventId: session.sink.lastEventId,
       audioFormat: VOICE_AUDIO_FORMAT,
     }),
   );
+  if (afterEventId !== undefined) session.sink.replayAfter(afterEventId);
 
   ws.on("message", (raw, isBinary) => {
+    if (session.attachment !== attachment) return;
     if (isBinary) {
       const buf = Buffer.isBuffer(raw)
         ? raw
         : Buffer.from(raw as ArrayBuffer);
-      if (buf.length && stt) stt.sendPcm(buf);
+      if (buf.length && attachment.focused && attachment.stt) {
+        attachment.stt.sendPcm(buf);
+      }
       return;
     }
-    let msg: { type?: string };
+    let msg: { type?: string; focused?: unknown };
     try {
-      msg = JSON.parse(bufferText(raw)) as { type?: string };
+      msg = JSON.parse(bufferText(raw)) as {
+        type?: string;
+        focused?: unknown;
+      };
     } catch {
       return;
     }
-    if (msg.type === "ptt_start") {
+    if (msg.type === "focus" && typeof msg.focused === "boolean") {
+      attachment.focused = msg.focused;
+      session.sink.setFocused(msg.focused);
+      session.turn.setSpeechEnabled(msg.focused);
+      if (!msg.focused) {
+        attachment.stt?.close();
+        attachment.stt = undefined;
+      } else if (mode === "handsfree") {
+        attachStt();
+      }
+    }
+    if (msg.type === "ptt_start" && attachment.focused) {
       input.pttStart();
       attachStt();
     }
     if (msg.type === "ptt_end") {
       input.pttEnd();
       // CloseStream so Deepgram flushes a late final; VoiceInput commits once.
-      stt?.finish();
+      attachment.stt?.finish();
     }
     if (msg.type === "abort") input.userAbort();
   });
 
   ws.on("close", () => {
-    stt?.close();
-    void turn.close();
-    sessions.delete(ws);
+    attachment.stt?.close();
+    attachment.stt = undefined;
+    if (session.attachment !== attachment) return;
+    session.attachment = undefined;
+    session.turn.setSpeechEnabled(false);
+    session.sink.detach(ws);
   });
 }
 
 async function teardownUserSessions(
-  sessions: Map<WebSocket, { turn: AgentTurn; stt?: SttStream; userId: string }>,
+  sessions: Map<string, VoiceSession>,
   userId: string,
 ): Promise<number> {
-  const live: WebSocket[] = [];
-  for (const [ws, session] of sessions) {
-    if (session.userId === userId) live.push(ws);
+  const session = sessions.get(userId);
+  if (!session) return 0;
+  sessions.delete(userId);
+  await closeVoiceSession(session, 4000, "killed");
+  return 1;
+}
+
+async function getOrCreateVoiceSession(
+  userId: string,
+  opts: GatewayOptions,
+  sessions: Map<string, VoiceSession>,
+  pendingSessions: Map<string, Promise<VoiceSession>>,
+): Promise<VoiceSession> {
+  const current = sessions.get(userId);
+  if (current) return current;
+
+  const pending = pendingSessions.get(userId);
+  if (pending) return pending;
+
+  const creating = (async () => {
+    const config = await opts.store.get(userId);
+    const sink = new SessionSink();
+    const turn = new AgentTurn(openBox(opts, config), sink, config, opts.elevenKey);
+    const session = { userId, config, sink, turn };
+    sessions.set(userId, session);
+    return session;
+  })();
+  pendingSessions.set(userId, creating);
+  try {
+    return await creating;
+  } finally {
+    if (pendingSessions.get(userId) === creating) pendingSessions.delete(userId);
   }
-  for (const ws of live) {
-    const session = sessions.get(ws);
-    session?.stt?.close();
-    await session?.turn.close();
-    sessions.delete(ws);
-    try {
-      ws.close(4000, "killed");
-    } catch {
-      /* already closed */
-    }
+}
+
+async function closeVoiceSession(
+  session: VoiceSession,
+  code: number,
+  reason: string,
+): Promise<void> {
+  const attachment = session.attachment;
+  session.attachment = undefined;
+  attachment?.stt?.close();
+  await session.turn.close();
+  if (!attachment) return;
+  session.sink.detach(attachment.ws);
+  try {
+    attachment.ws.close(code, reason);
+  } catch {
+    /* already closed */
   }
-  return live.length;
+}
+
+function parseEventCursor(raw: string | null): number | undefined {
+  if (raw === null || raw.trim() === "") return undefined;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 0) return undefined;
+  return value;
 }
 
 function openBox(opts: GatewayOptions, config: UserConfig): BoxConnection {

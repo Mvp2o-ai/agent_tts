@@ -29,8 +29,10 @@ Preserve these decisions:
   use recreate semantics such as `docker run --rm` under a supervisor or
   Compose force-recreate). Only the SQLite config volume survives. Work not
   committed or pushed before a container exits is intentionally not durable.
-- The mobile app stores multiple agent endpoints (URL + token) and switches
-  between them. Two agents = two deployments.
+- The mobile app stores multiple agent endpoints (URL + token), keeps multiple
+  sessions connected, and switches microphone/speaker focus without aborting
+  background work. Two agents = two deployments. Transcripts are device-side,
+  keyed by profile and container generation.
 - Harnesses run fully unattended because the container has no TTY.
 - The mobile app stays React Native/Expo. Swift and Kotlin are limited to the
   native full-duplex audio module.
@@ -99,7 +101,9 @@ Required gateway values:
 - `ELEVENLABS_API_KEY`
 
 Harness model keys and repository credentials are normally entered in the
-mobile Settings screen and persisted by the gateway:
+mobile Settings screen, saved in the phone's native secure credential library,
+and selected for each agent. Raw PATs/model keys must not be written to
+AsyncStorage. The selected values are also persisted by that agent's gateway:
 
 - `ANTHROPIC_API_KEY`
 - `CURSOR_API_KEY`

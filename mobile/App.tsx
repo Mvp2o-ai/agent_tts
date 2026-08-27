@@ -1,5 +1,12 @@
 import { StatusBar } from "expo-status-bar";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   Alert,
   KeyboardAvoidingView,
@@ -17,7 +24,9 @@ import {
   saveConfig,
   type HarnessId,
 } from "./src/api";
+import type { CredentialEntry } from "./src/credential-vault";
 import { normalizeGatewayUrl } from "./src/protocol";
+import { credentialVault } from "./src/secure-credential-vault";
 import {
   activeAgent,
   HARNESSES,
@@ -52,6 +61,21 @@ import { Transcript } from "./src/ui/Transcript";
 import { color, font, inset, radius, space } from "./src/ui/theme";
 
 type Tab = "talk" | "settings";
+type ManagedSession = ReturnType<typeof useVoiceSession>;
+
+const EMPTY_SESSION: ManagedSession = {
+  status: "disconnected",
+  events: [],
+  speaking: false,
+  working: false,
+  harness: "",
+  generationId: "",
+  connect: () => undefined,
+  disconnect: () => undefined,
+  pttStart: () => undefined,
+  pttEnd: () => undefined,
+  abort: () => undefined,
+};
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("talk");
@@ -64,6 +88,12 @@ export default function App() {
   const [configAction, setConfigAction] = useState<"load" | "save" | null>(
     null,
   );
+  const [sessions, setSessions] = useState<Record<string, ManagedSession>>({});
+  const [credentials, setCredentials] = useState<CredentialEntry[]>([]);
+  const [gitCredentialLabel, setGitCredentialLabel] = useState("");
+  const [modelCredentialLabel, setModelCredentialLabel] = useState("");
+  const [legacySecretsMigrated, setLegacySecretsMigrated] = useState(false);
+  const migrationStartedRef = useRef(false);
 
   const agent = activeAgent(settings);
   const conn = useMemo(
@@ -75,7 +105,14 @@ export default function App() {
     [agent.gatewayUrl, agent.token, settings.userId],
   );
 
-  const session = useVoiceSession(conn);
+  const reportSession = useCallback(
+    (id: string, session: ManagedSession) =>
+      setSessions((current) =>
+        current[id] === session ? current : { ...current, [id]: session },
+      ),
+    [],
+  );
+  const session = sessions[agent.id] ?? EMPTY_SESSION;
   const connected = session.status !== "disconnected";
 
   const selectedHarness =
@@ -95,14 +132,21 @@ export default function App() {
       };
     });
 
-  const selectAgent = (id: string) =>
+  const selectAgent = (id: string) => {
+    setPttHeld(false);
     setSettings((prev) => ({ ...prev, activeAgentId: id }));
+  };
 
   const addAgent = () => {
     const id = `agent-${Date.now()}`;
+    const projectNumber =
+      settings.agents.reduce((max, profile) => {
+        const match = /^Project (\d+)$/i.exec(profile.name.trim());
+        return match ? Math.max(max, Number(match[1])) : max;
+      }, 0) + 1;
     const profile: AgentProfile = {
       id,
-      name: "New agent",
+      name: `Project ${projectNumber}`,
       gatewayUrl: "http://",
       token: "",
     };
@@ -124,6 +168,188 @@ export default function App() {
           : prev.activeAgentId;
       return { ...prev, agents, activeAgentId };
     });
+
+  const refreshCredentials = useCallback(() => {
+    void credentialVault.list().then(setCredentials);
+  }, []);
+
+  useEffect(() => {
+    refreshCredentials();
+  }, [refreshCredentials]);
+
+  useEffect(() => {
+    if (!hydrated || migrationStartedRef.current) return;
+    migrationStartedRef.current = true;
+    void (async () => {
+      const current = activeAgent(settings);
+      const profilePatch: Partial<AgentProfile> = {};
+      const imported: CredentialEntry[] = [];
+
+      if (settings.gitPat && !current.gitCredentialId) {
+        const entry = await credentialVault.save({
+          kind: "git-pat",
+          label: "Imported Git PAT",
+          secret: settings.gitPat,
+        });
+        profilePatch.gitCredentialId = entry.id;
+        imported.push(entry);
+      }
+
+      const modelCredentialIds = { ...(current.modelCredentialIds ?? {}) };
+      for (const [keyEnv, secret] of Object.entries(settings.modelKeys)) {
+        if (!secret || modelCredentialIds[keyEnv]) continue;
+        const entry = await credentialVault.save({
+          kind: "model-key",
+          keyEnv,
+          label: `Imported ${keyEnv}`,
+          secret,
+        });
+        modelCredentialIds[keyEnv] = entry.id;
+        imported.push(entry);
+      }
+      if (Object.keys(modelCredentialIds).length > 0) {
+        profilePatch.modelCredentialIds = modelCredentialIds;
+      }
+
+      if (Object.keys(profilePatch).length > 0) {
+        setSettings((prev) => ({
+          ...prev,
+          agents: prev.agents.map((profile) =>
+            profile.id === current.id ? { ...profile, ...profilePatch } : profile,
+          ),
+        }));
+      }
+      if (imported.length > 0) refreshCredentials();
+      setLegacySecretsMigrated(true);
+    })();
+  }, [hydrated, refreshCredentials, setSettings, settings]);
+
+  useEffect(() => {
+    if (!legacySecretsMigrated) return;
+    let current = true;
+    void (async () => {
+      const profile = activeAgent(settings);
+      const gitPat = profile.gitCredentialId
+        ? await credentialVault.getSecret(profile.gitCredentialId)
+        : "";
+      const modelKeys: Record<string, string> = {};
+      for (const [keyEnv, id] of Object.entries(
+        profile.modelCredentialIds ?? {},
+      )) {
+        const secret = await credentialVault.getSecret(id);
+        if (secret) modelKeys[keyEnv] = secret;
+      }
+      if (!current) return;
+      setSettings((prev) =>
+        prev.activeAgentId === profile.id
+          ? { ...prev, gitPat: gitPat ?? "", modelKeys }
+          : prev,
+      );
+    })();
+    return () => {
+      current = false;
+    };
+  }, [
+    agent.gitCredentialId,
+    agent.id,
+    agent.modelCredentialIds,
+    legacySecretsMigrated,
+    setSettings,
+  ]);
+
+  async function selectGitCredential(entry: CredentialEntry) {
+    const secret = await credentialVault.getSecret(entry.id);
+    if (secret == null) return;
+    patch({ gitPat: secret });
+    patchActiveAgent({ gitCredentialId: entry.id });
+  }
+
+  async function saveGitCredential() {
+    if (!settings.gitPat.trim()) {
+      setConfigOk(false);
+      setConfigMsg("Enter a Git PAT before saving it to the library.");
+      return;
+    }
+    const entry = await credentialVault.save({
+      kind: "git-pat",
+      label: gitCredentialLabel,
+      secret: settings.gitPat,
+    });
+    patchActiveAgent({ gitCredentialId: entry.id });
+    setGitCredentialLabel("");
+    refreshCredentials();
+  }
+
+  async function selectModelCredential(entry: CredentialEntry) {
+    const secret = await credentialVault.getSecret(entry.id);
+    if (secret == null) return;
+    setSettings((prev) => {
+      const current = activeAgent(prev);
+      return {
+        ...prev,
+        modelKeys: {
+          ...prev.modelKeys,
+          [selectedHarness.keyEnv]: secret,
+        },
+        agents: prev.agents.map((profile) =>
+          profile.id === current.id
+            ? {
+                ...profile,
+                modelCredentialIds: {
+                  ...(profile.modelCredentialIds ?? {}),
+                  [selectedHarness.keyEnv]: entry.id,
+                },
+              }
+            : profile,
+        ),
+      };
+    });
+  }
+
+  async function saveModelCredential() {
+    const secret = settings.modelKeys[selectedHarness.keyEnv] ?? "";
+    if (!secret.trim()) {
+      setConfigOk(false);
+      setConfigMsg("Enter a model key before saving it to the library.");
+      return;
+    }
+    const entry = await credentialVault.save({
+      kind: "model-key",
+      keyEnv: selectedHarness.keyEnv,
+      label: modelCredentialLabel,
+      secret,
+    });
+    await selectModelCredential(entry);
+    setModelCredentialLabel("");
+    refreshCredentials();
+  }
+
+  async function removeCredential(entry: CredentialEntry) {
+    await credentialVault.remove(entry.id);
+    setSettings((prev) => ({
+      ...prev,
+      gitPat:
+        activeAgent(prev).gitCredentialId === entry.id ? "" : prev.gitPat,
+      modelKeys: Object.fromEntries(
+        Object.entries(prev.modelKeys).filter(
+          ([keyEnv]) =>
+            activeAgent(prev).modelCredentialIds?.[keyEnv] !== entry.id,
+        ),
+      ),
+      agents: prev.agents.map((profile) => ({
+        ...profile,
+        ...(profile.gitCredentialId === entry.id
+          ? { gitCredentialId: undefined }
+          : {}),
+        modelCredentialIds: Object.fromEntries(
+          Object.entries(profile.modelCredentialIds ?? {}).filter(
+            ([, id]) => id !== entry.id,
+          ),
+        ),
+      })),
+    }));
+    refreshCredentials();
+  }
 
   useEffect(() => {
     if (!configMsg) return;
@@ -265,11 +491,22 @@ export default function App() {
   return (
     <View style={styles.root}>
       <StatusBar style="light" />
+      {settings.agents.map((profile) => (
+        <VoiceSessionController
+          key={profile.id}
+          profile={profile}
+          userId={settings.userId}
+          focused={profile.id === settings.activeAgentId}
+          onChange={reportSession}
+        />
+      ))}
 
       <View style={styles.header}>
         <View>
           <Text style={styles.wordmark}>agent_tts</Text>
-          <Text style={styles.tagline}>{describeTarget(settings)}</Text>
+          <Text style={styles.tagline}>
+            {describeTarget(settings, session.harness)}
+          </Text>
         </View>
         <StatusPill
           label={statusLabel(session.status, session.speaking)}
@@ -282,6 +519,55 @@ export default function App() {
 
       {tab === "talk" ? (
         <View style={styles.screen}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.sessionSwitcher}
+            style={styles.sessionSwitcherScroll}
+          >
+            {settings.agents.map((profile) => {
+              const profileSession = sessions[profile.id] ?? EMPTY_SESSION;
+              const selected = profile.id === settings.activeAgentId;
+              return (
+                <Pressable
+                  key={profile.id}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected }}
+                  accessibilityLabel={`Switch to ${sessionDisplayName(
+                    profile,
+                    profileSession.harness || settings.harness,
+                  )}`}
+                  onPress={() => selectAgent(profile.id)}
+                  style={[
+                    styles.sessionChip,
+                    selected && styles.sessionChipActive,
+                  ]}
+                >
+                  <View
+                    style={[
+                      styles.sessionDot,
+                      {
+                        backgroundColor: sessionStatusColor(profileSession),
+                      },
+                    ]}
+                  />
+                  <Text
+                    numberOfLines={1}
+                    style={[
+                      styles.sessionChipText,
+                      selected && styles.sessionChipTextActive,
+                    ]}
+                  >
+                    {sessionDisplayName(
+                      profile,
+                      profileSession.harness || settings.harness,
+                    )}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+
           <Segmented<VoiceMode>
             value={mode}
             onChange={setMode}
@@ -394,7 +680,10 @@ export default function App() {
                       key={profile.id}
                       accessibilityRole="radio"
                       accessibilityState={{ selected }}
-                      accessibilityLabel={profile.name}
+                      accessibilityLabel={sessionDisplayName(
+                        profile,
+                        sessions[profile.id]?.harness || settings.harness,
+                      )}
                       onPress={() => selectAgent(profile.id)}
                       style={[
                         styles.agentRow,
@@ -408,7 +697,10 @@ export default function App() {
                         ]}
                         numberOfLines={1}
                       >
-                        {profile.name}
+                        {sessionDisplayName(
+                          profile,
+                          sessions[profile.id]?.harness || settings.harness,
+                        )}
                       </Text>
                       {selected ? (
                         <CheckIcon size={14} color={color.accent} />
@@ -435,10 +727,10 @@ export default function App() {
                 style={styles.agentAdd}
               />
               <Field
-                label="Name"
+                label="Project name"
                 value={agent.name}
                 onChange={(v) => patchActiveAgent({ name: v })}
-                placeholder="Agent 1"
+                placeholder="Project 1"
               />
               <Field
                 label="Gateway URL"
@@ -492,6 +784,24 @@ export default function App() {
                 secure
                 autoCapitalize="none"
                 hint="Fine-grained token for the repos you will name by voice. Contents + Pull requests (read/write), short expiry. The workspace starts empty — tell the agent which remotes to clone."
+              />
+              <Field
+                label="Credential label"
+                value={gitCredentialLabel}
+                onChange={setGitCredentialLabel}
+                placeholder="github.com — ken"
+              />
+              <Button
+                tone="neutral"
+                label="Save PAT to device library"
+                onPress={() => void saveGitCredential()}
+              />
+              <CredentialPicker
+                entries={credentials.filter((entry) => entry.kind === "git-pat")}
+                selectedId={agent.gitCredentialId}
+                onSelect={(entry) => void selectGitCredential(entry)}
+                onRemove={(entry) => void removeCredential(entry)}
+                emptyLabel="No saved PATs yet."
               />
               <Field
                 label="Git host"
@@ -556,6 +866,30 @@ export default function App() {
                 secure
                 autoCapitalize="none"
                 hint={`Sent to the box as ${selectedHarness.keyEnv}.`}
+              />
+              <Field
+                label="Key label"
+                value={modelCredentialLabel}
+                onChange={setModelCredentialLabel}
+                placeholder={`${selectedHarness.label} — personal`}
+              />
+              <Button
+                tone="neutral"
+                label="Save key to device library"
+                onPress={() => void saveModelCredential()}
+              />
+              <CredentialPicker
+                entries={credentials.filter(
+                  (entry) =>
+                    entry.kind === "model-key" &&
+                    entry.keyEnv === selectedHarness.keyEnv,
+                )}
+                selectedId={
+                  agent.modelCredentialIds?.[selectedHarness.keyEnv]
+                }
+                onSelect={(entry) => void selectModelCredential(entry)}
+                onRemove={(entry) => void removeCredential(entry)}
+                emptyLabel={`No saved ${selectedHarness.label} keys yet.`}
               />
             </Card>
 
@@ -625,6 +959,108 @@ export default function App() {
   );
 }
 
+function CredentialPicker({
+  entries,
+  selectedId,
+  onSelect,
+  onRemove,
+  emptyLabel,
+}: {
+  entries: CredentialEntry[];
+  selectedId?: string;
+  onSelect: (entry: CredentialEntry) => void;
+  onRemove: (entry: CredentialEntry) => void;
+  emptyLabel: string;
+}) {
+  if (entries.length === 0) {
+    return <Text style={styles.note}>{emptyLabel}</Text>;
+  }
+  return (
+    <View style={styles.credentialList}>
+      {entries.map((entry) => {
+        const selected = entry.id === selectedId;
+        return (
+          <Pressable
+            key={entry.id}
+            accessibilityRole="radio"
+            accessibilityState={{ selected }}
+            accessibilityLabel={entry.label}
+            onPress={() => onSelect(entry)}
+            style={[
+              styles.credentialRow,
+              selected && styles.credentialRowActive,
+            ]}
+          >
+            <Text
+              numberOfLines={1}
+              style={[
+                styles.credentialName,
+                selected && styles.credentialNameActive,
+              ]}
+            >
+              {entry.label}
+            </Text>
+            {selected ? <CheckIcon size={14} color={color.accent} /> : null}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Delete ${entry.label}`}
+              hitSlop={8}
+              onPress={() => onRemove(entry)}
+              style={styles.agentDelete}
+            >
+              <TrashIcon size={15} color={color.danger} />
+            </Pressable>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+function VoiceSessionController({
+  profile,
+  userId,
+  focused,
+  onChange,
+}: {
+  profile: AgentProfile;
+  userId: string;
+  focused: boolean;
+  onChange: (id: string, session: ManagedSession) => void;
+}) {
+  const conn = useMemo(
+    () => ({
+      gatewayUrl: normalizeGatewayUrl(profile.gatewayUrl),
+      token: profile.token,
+      userId,
+    }),
+    [profile.gatewayUrl, profile.token, userId],
+  );
+  const session = useVoiceSession(conn, { profileId: profile.id, focused });
+  const managed = useMemo<ManagedSession>(
+    () => ({ ...session }),
+    [
+      session.abort,
+      session.connect,
+      session.disconnect,
+      session.events,
+      session.generationId,
+      session.harness,
+      session.pttEnd,
+      session.pttStart,
+      session.speaking,
+      session.status,
+      session.working,
+    ],
+  );
+
+  useEffect(() => {
+    onChange(profile.id, managed);
+  }, [managed, onChange, profile.id]);
+
+  return null;
+}
+
 function TabItem({
   label,
   icon,
@@ -685,15 +1121,43 @@ function statusTone(
   return "idle";
 }
 
-function describeTarget(settings: DeviceSettings): string {
+function harnessPrefix(harness: string): string {
+  switch (harness) {
+    case "claude-code":
+      return "Claude";
+    case "cursor-cli":
+      return "Cursor";
+    case "gemini-cli":
+      return "Gemini";
+    case "codex":
+      return "Codex";
+    default:
+      return "Agent";
+  }
+}
+
+function sessionDisplayName(profile: AgentProfile, harness: string): string {
+  return `${harnessPrefix(harness)} · ${profile.name.trim() || "Project"}`;
+}
+
+function sessionStatusColor(session: ManagedSession): string {
+  if (session.speaking) return color.accent;
+  if (session.working) return color.warn;
+  if (session.status === "ready") return color.live;
+  if (session.status === "connecting") return color.textMuted;
+  return color.textDim;
+}
+
+function describeTarget(settings: DeviceSettings, connectedHarness: string): string {
   const agent = activeAgent(settings);
-  const harness =
-    HARNESSES.find((h) => h.id === settings.harness)?.label ?? "no harness";
-  const name = agent.name.trim() || "Agent";
+  const name = sessionDisplayName(
+    agent,
+    connectedHarness || settings.harness,
+  );
   const host = agent.gatewayUrl
     .replace(/^[a-z]+:\/\//i, "")
     .replace(/\/+$/, "");
-  return host ? `${name} · ${harness} · ${host}` : `${name} · ${harness}`;
+  return host ? `${name} · ${host}` : name;
 }
 
 const styles = StyleSheet.create({
@@ -725,6 +1189,44 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.xl,
     paddingTop: space.sm,
     gap: space.md,
+  },
+  sessionSwitcherScroll: {
+    flexGrow: 0,
+    marginHorizontal: -space.xl,
+  },
+  sessionSwitcher: {
+    gap: space.sm,
+    paddingHorizontal: space.xl,
+  },
+  sessionChip: {
+    maxWidth: 220,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.sm,
+    borderWidth: 1,
+    borderColor: color.border,
+    borderRadius: radius.pill,
+    backgroundColor: color.surface,
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm,
+  },
+  sessionChipActive: {
+    borderColor: color.accent,
+    backgroundColor: color.accentTint,
+  },
+  sessionDot: {
+    width: 8,
+    height: 8,
+    borderRadius: radius.pill,
+  },
+  sessionChipText: {
+    flexShrink: 1,
+    color: color.textMuted,
+    fontSize: font.caption,
+    fontWeight: "700",
+  },
+  sessionChipTextActive: {
+    color: color.text,
   },
   actionRow: {
     flexDirection: "row",
@@ -773,6 +1275,34 @@ const styles = StyleSheet.create({
   },
   agentAdd: {
     marginBottom: space.md,
+  },
+  credentialList: {
+    gap: space.sm,
+    marginTop: space.md,
+  },
+  credentialRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.sm,
+    borderWidth: 1,
+    borderColor: color.border,
+    borderRadius: radius.md,
+    backgroundColor: color.surfaceRaised,
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm,
+  },
+  credentialRowActive: {
+    borderColor: color.accent,
+    backgroundColor: color.accentTint,
+  },
+  credentialName: {
+    flex: 1,
+    color: color.textMuted,
+    fontSize: font.caption,
+    fontWeight: "700",
+  },
+  credentialNameActive: {
+    color: color.text,
   },
   note: {
     color: color.textDim,

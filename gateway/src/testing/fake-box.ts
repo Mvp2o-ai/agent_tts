@@ -26,15 +26,21 @@ rl.on("line", (line) => {
   }
   if (msg.type === "prompt" && msg.id && msg.text) {
     current = msg.id;
-    process.stdout.write(
-      `${JSON.stringify({ type: "chunk", promptId: msg.id, text: "echo:" })}\n`,
-    );
-    process.stdout.write(
-      `${JSON.stringify({ type: "chunk", promptId: msg.id, text: msg.text })}\n`,
-    );
-    process.stdout.write(
-      `${JSON.stringify({ type: "done", promptId: msg.id })}\n`,
-    );
-    current = undefined;
+    const delayMatch = /^delay:(\d+):(.*)$/s.exec(msg.text);
+    const delay = delayMatch ? Number(delayMatch[1]) : 0;
+    const text = delayMatch?.[2] ?? msg.text;
+    setTimeout(() => {
+      if (current !== msg.id) return;
+      process.stdout.write(
+        `${JSON.stringify({ type: "chunk", promptId: msg.id, text: "echo:" })}\n`,
+      );
+      process.stdout.write(
+        `${JSON.stringify({ type: "chunk", promptId: msg.id, text })}\n`,
+      );
+      process.stdout.write(
+        `${JSON.stringify({ type: "done", promptId: msg.id })}\n`,
+      );
+      current = undefined;
+    }, delay);
   }
 });

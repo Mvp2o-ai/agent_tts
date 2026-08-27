@@ -53,6 +53,7 @@ export interface AgentTurnOptions {
 export class AgentTurn {
   readonly queue = new PromptQueue();
   speaking = false;
+  private speechEnabled = true;
   private tts: TtsStream | null = null;
   private ttsGen = 0;
   private speech = new SpeechBuffer();
@@ -63,6 +64,11 @@ export class AgentTurn {
   private closed = false;
   private readonly openTts: OpenTts;
   private readonly onIdle?: () => void;
+
+  get activity(): "idle" | "working" | "speaking" {
+    if (this.speaking) return "speaking";
+    return this.phase === "idle" ? "idle" : "working";
+  }
 
   constructor(
     private readonly box: BoxConnection,
@@ -122,6 +128,23 @@ export class AgentTurn {
     this.stopTts();
     this.ttsSuppressed = true;
     this.sink.sendJson({ type: "barge_in" });
+    if (draining) this.releaseDrain();
+  }
+
+  /**
+   * Enables speech only while a client is focused and able to play it.
+   * Disabling closes an active vendor stream immediately, so background or
+   * disconnected sessions continue as text-only without consuming TTS.
+   */
+  setSpeechEnabled(enabled: boolean): void {
+    if (this.closed || this.speechEnabled === enabled) return;
+    this.speechEnabled = enabled;
+    if (enabled) return;
+
+    const hadTts = this.speaking || this.tts !== null;
+    const draining = this.phase === "draining";
+    this.stopTts();
+    if (hadTts) this.sink.sendJson({ type: "tts_end" });
     if (draining) this.releaseDrain();
   }
 
@@ -213,7 +236,14 @@ export class AgentTurn {
   }
 
   private speakPhrases(phrases: string[]): void {
-    if (this.closed || this.muted || this.ttsSuppressed) return;
+    if (
+      this.closed ||
+      !this.speechEnabled ||
+      this.muted ||
+      this.ttsSuppressed
+    ) {
+      return;
+    }
     if (this.phase !== "running") return;
     if (!this.elevenKey || phrases.length === 0) return;
     const voiceId = this.config.voice.ttsVoiceId || "21m00Tcm4TlvDq8ikWAM";

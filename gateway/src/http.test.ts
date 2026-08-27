@@ -21,6 +21,7 @@ describe("gateway http", () => {
       store,
       deepgramKey: "test-stt-key",
       boxCommand: ["node", "--import", "tsx", fakeBox],
+      generationId: "test-generation",
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     const { port } = server.address() as AddressInfo;
@@ -70,8 +71,99 @@ describe("gateway http", () => {
       });
       assert.equal(ready.mode, "ptt");
       assert.equal(ready.harness, "claude-code");
+      assert.equal(ready.generationId, "test-generation");
+      assert.equal(ready.lastEventId, 0);
       assert.deepEqual(ready.audioFormat, VOICE_AUDIO_FORMAT);
+
+      const killed = await fetch(
+        `http://127.0.0.1:${port}/v1/session/kill?userId=default`,
+        {
+          method: "POST",
+          headers: { authorization: "Bearer test-token" },
+        },
+      );
+      assert.deepEqual(await killed.json(), { ok: true, killed: 1 });
     } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((err) => (err ? reject(err) : resolve())),
+      );
+      await store.close();
+    }
+  });
+
+  it("keeps a turn alive across disconnect and replays missed text on reconnect", async () => {
+    const store = new MemoryConfigStore();
+    await store.save("default", {
+      repo: { url: "", credential: "" },
+      harness: "claude-code",
+    });
+    const { server, sessions } = createGateway({
+      token: "test-token",
+      store,
+      deepgramKey: "test-stt-key",
+      boxCommand: ["node", "--import", "tsx", fakeBox],
+      generationId: "generation-a",
+    });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const { port } = server.address() as AddressInfo;
+    const first = new WebSocket(
+      `ws://127.0.0.1:${port}/v1/voice?token=test-token&userId=default&mode=ptt`,
+    );
+
+    try {
+      const firstReady = await waitForJson(first, (msg) => msg.type === "ready");
+      assert.equal(firstReady.generationId, "generation-a");
+      const session = sessions.get("default");
+      assert.ok(session);
+
+      const startedPromise = waitForJson(
+        first,
+        (msg) => msg.type === "prompt_start",
+      );
+      session.turn.enqueue("delay:75:survived reconnect");
+      const started = await startedPromise;
+      const cursor = Number(started.eventId);
+      assert.ok(Number.isSafeInteger(cursor));
+
+      first.close();
+      await new Promise<void>((resolve) => first.once("close", () => resolve()));
+      await waitFor(() => session.sink.lastEventId >= cursor + 3);
+      assert.equal(sessions.get("default"), session);
+
+      const second = new WebSocket(
+        `ws://127.0.0.1:${port}/v1/voice?token=test-token&userId=default&mode=ptt&focused=false&afterEventId=${cursor}`,
+      );
+      const replayed = await collectJsonUntil(
+        second,
+        (msg) => msg.type === "done",
+      );
+      const ready = replayed.find((msg) => msg.type === "ready");
+      assert.equal(ready?.generationId, "generation-a");
+      assert.equal(ready?.focused, false);
+      assert.equal(sessions.get("default"), session);
+      assert.deepEqual(
+        replayed
+          .filter((msg) => msg.type === "agent_text")
+          .map((msg) => msg.text),
+        ["echo:", "survived reconnect"],
+      );
+      assert.ok(
+        replayed
+          .filter((msg) => "eventId" in msg)
+          .every((msg) => Number(msg.eventId) > cursor),
+      );
+      second.close();
+
+      const killed = await fetch(
+        `http://127.0.0.1:${port}/v1/session/kill?userId=default`,
+        {
+          method: "POST",
+          headers: { authorization: "Bearer test-token" },
+        },
+      );
+      assert.deepEqual(await killed.json(), { ok: true, killed: 1 });
+    } finally {
+      first.close();
       await new Promise<void>((resolve, reject) =>
         server.close((err) => (err ? reject(err) : resolve())),
       );
@@ -118,3 +210,45 @@ describe("gateway http", () => {
     }
   });
 });
+
+function waitForJson(
+  ws: WebSocket,
+  predicate: (message: Record<string, unknown>) => boolean,
+): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("message timeout")), 5000);
+    ws.on("message", (data) => {
+      const message = JSON.parse(String(data)) as Record<string, unknown>;
+      if (!predicate(message)) return;
+      clearTimeout(timer);
+      resolve(message);
+    });
+    ws.on("error", reject);
+  });
+}
+
+function collectJsonUntil(
+  ws: WebSocket,
+  predicate: (message: Record<string, unknown>) => boolean,
+): Promise<Record<string, unknown>[]> {
+  return new Promise((resolve, reject) => {
+    const messages: Record<string, unknown>[] = [];
+    const timer = setTimeout(() => reject(new Error("message timeout")), 5000);
+    ws.on("message", (data) => {
+      const message = JSON.parse(String(data)) as Record<string, unknown>;
+      messages.push(message);
+      if (!predicate(message)) return;
+      clearTimeout(timer);
+      resolve(messages);
+    });
+    ws.on("error", reject);
+  });
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 5000;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("condition timeout");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}

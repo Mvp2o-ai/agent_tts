@@ -38,7 +38,8 @@
           "microphonePermission": "agent_tts streams your voice to your self-hosted gateway."
         }
       ],
-      "expo-asset"
+      "expo-asset",
+      "expo-secure-store"
     ],
     "androidStatusBar": {
       "backgroundColor": "#0e1014",
