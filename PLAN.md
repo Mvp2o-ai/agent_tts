@@ -2,7 +2,7 @@
 
 ## What it is
 
-A mobile voice remote for a coding agent running in a container. The user speaks; the harness (Claude Code / Gemini CLI / Codex CLI / Cursor CLI) works in their repo; responses come back as speech. Everything else — git, tools, editing — is the harness's job.
+A mobile voice remote for a coding agent running in a container. The user speaks; the harness (Claude Code / Gemini CLI / Codex CLI / Cursor CLI) clones remotes and works in them; responses come back as speech. Everything else — git, PRs, tools, editing — is the harness's job.
 
 ## Architecture
 
@@ -17,7 +17,7 @@ gateway (Node/TS, headless API)
    ▼
 agentbox (Docker, one per session)
    │  adapter speaks one JSON-lines protocol over stdin/stdout
-   └─ harness: claude-code | cursor-cli | gemini-cli | codex, cwd = user's repo clone
+   └─ harness: claude-code | cursor-cli | gemini-cli | codex, cwd = /workspace (empty; agent clones)
 ```
 
 ## Core behaviors (the spec)
@@ -27,8 +27,8 @@ agentbox (Docker, one per session)
 3. **Prompt queue.** Utterances that arrive while the harness is mid-turn are queued and dispatched on the next iteration — same semantics as the platform's incoming-prompt queue.
 4. **Stop word = hard stop.** A configurable keyword (default: "hard stop") detected in STT aborts the current harness turn exactly like pressing the web UI stop button. Detection is transcript-based (Deepgram interim results), not a separate wake-word model.
 5. **Harness-agnostic box.** The container image includes all four harnesses (claude-code, gemini-cli, codex, cursor-cli); the adapter selects one per session. Adding a harness = adding an adapter, no mobile/gateway changes.
-6. **Config lives in SQLite.** Per-user config (repo URL, git credentials/PAT, harness choice, model keys, stop word, voice) is stored in a SQLite file (Node's built-in driver, no server) and editable from the mobile app in real time. Bring your own persistence volume. No baked-in config.
-7. **Repo access.** Gateway injects git credentials into the container at session start; adapter clones/pulls the configured repo. Harness's own git abilities take it from there.
+6. **Config lives in SQLite.** Per-user config (git PAT, optional git host, harness choice, model keys, stop word, voice) is stored in a SQLite file (Node's built-in driver, no server) and editable from the mobile app in real time. Bring your own persistence volume. No baked-in config.
+7. **Repo access.** Gateway injects git/gh credentials into the container at session start. The adapter does not clone. The harness clones, checks out PRs, and opens PRs.
 
 ## Stack decisions
 

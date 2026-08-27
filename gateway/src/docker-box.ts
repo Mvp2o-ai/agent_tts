@@ -5,20 +5,80 @@ import { spawn } from "node:child_process";
 import { attachProcess, type BoxConnection } from "./box-client.js";
 import type { UserConfig } from "./config-schema.js";
 
+/** Host for git extraheader / gh. Empty or SSH remotes → github.com. */
+export function gitHostFromRepoUrl(url: string): string {
+  const raw = url.trim();
+  if (!raw) return "github.com";
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      return parsed.host || "github.com";
+    }
+  } catch {
+    /* host or scp-style */
+  }
+  if (/^[A-Za-z0-9.-]+$/.test(raw)) return raw;
+  return "github.com";
+}
+
 export function harnessEnv(config: UserConfig): Record<string, string> {
   const env: Record<string, string> = {
     AGENT_TTS_HARNESS: config.harness,
-    AGENT_TTS_REPO_URL: config.repo.url,
     AGENT_TTS_GIT_CREDENTIAL: config.repo.credential,
+    AGENT_TTS_GIT_HOST: gitHostFromRepoUrl(config.repo.url),
     AGENT_TTS_WORKSPACE: "/workspace",
   };
-  if (config.repo.defaultBranch) {
-    env.AGENT_TTS_GIT_BRANCH = config.repo.defaultBranch;
-  }
   for (const [k, v] of Object.entries(config.modelKeys)) {
     if (k && v) env[k] = v;
   }
   return env;
+}
+
+/** Docker `--filter name=` prefix for a user's session and debug boxes. */
+export function dockerKillFilter(userId: string): string {
+  const safe = userId.replace(/[^A-Za-z0-9._-]+/g, "-") || "default";
+  return `agent-tts-${safe}-`;
+}
+
+export function dockerPsArgs(userId: string): string[] {
+  return ["ps", "-aq", "--filter", `name=${dockerKillFilter(userId)}`];
+}
+
+export function dockerRmArgs(ids: string[]): string[] {
+  return ["rm", "-f", ...ids];
+}
+
+export async function killSessionBoxes(
+  dockerBin: string,
+  userId: string,
+): Promise<string[]> {
+  const listed = await runDocker(dockerBin, dockerPsArgs(userId));
+  const ids = listed.split(/\s+/).filter(Boolean);
+  if (ids.length === 0) return [];
+  await runDocker(dockerBin, dockerRmArgs(ids));
+  return ids;
+}
+
+function runDocker(bin: string, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.on("data", (buf: Buffer) => {
+      stdout += buf.toString();
+    });
+    child.stderr?.on("data", (buf: Buffer) => {
+      stderr += buf.toString();
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve(stdout.trim());
+        return;
+      }
+      reject(new Error(stderr.trim() || `${bin} ${args[0]} exited ${code}`));
+    });
+  });
 }
 
 export function dockerRunArgs(opts: {

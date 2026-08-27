@@ -4,7 +4,7 @@ import type { ConfigStore } from "./config-store.js";
 import type { UserConfig } from "./config-schema.js";
 import { HARNESS_ORDER } from "./config-schema.js";
 import { spawnCommandBox, type BoxConnection } from "./box-client.js";
-import { spawnDockerBox } from "./docker-box.js";
+import { killSessionBoxes, spawnDockerBox } from "./docker-box.js";
 import { AgentTurn, type VoiceSink } from "./agent-turn.js";
 import { openDeepgram, type SttStream } from "./deepgram.js";
 import { VOICE_AUDIO_FORMAT } from "./elevenlabs.js";
@@ -22,10 +22,13 @@ export interface GatewayOptions {
 }
 
 export function createGateway(opts: GatewayOptions) {
-  const sessions = new Map<WebSocket, { turn: AgentTurn; stt?: SttStream }>();
+  const sessions = new Map<
+    WebSocket,
+    { turn: AgentTurn; stt?: SttStream; userId: string }
+  >();
 
   const server = createServer((req, res) => {
-    void handleHttp(req, res, opts);
+    void handleHttp(req, res, opts, sessions);
   });
 
   const wss = new WebSocketServer({ server, path: "/v1/voice" });
@@ -40,6 +43,7 @@ async function handleHttp(
   req: IncomingMessage,
   res: ServerResponse,
   opts: GatewayOptions,
+  sessions: Map<WebSocket, { turn: AgentTurn; stt?: SttStream; userId: string }>,
 ): Promise<void> {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
 
@@ -74,6 +78,17 @@ async function handleHttp(
     }
   }
 
+  if (req.method === "POST" && url.pathname === "/v1/session/kill") {
+    if (!authorize(req, opts.token, url)) {
+      json(res, 401, { error: "unauthorized" });
+      return;
+    }
+    const userId = url.searchParams.get("userId") || "default";
+    const killed = await teardownUserSessions(opts, sessions, userId);
+    json(res, 200, { ok: true, killed: killed.length });
+    return;
+  }
+
   if (req.method === "POST" && url.pathname === "/v1/debug/prompt") {
     if (!authorize(req, opts.token, url)) {
       json(res, 401, { error: "unauthorized" });
@@ -99,14 +114,10 @@ async function debugPrompt(
     return;
   }
   const config = await opts.store.get(userId);
-  if (!config.repo.url) {
-    json(res, 400, { error: "configure a repo URL first" });
-    return;
-  }
 
   let box: BoxConnection;
   try {
-    box = await openBox(opts, config, `agent-tts-debug-${Date.now()}`);
+    box = await openBox(opts, config, `agent-tts-${userId}-${Date.now()}`);
   } catch (err) {
     json(res, 503, {
       error: err instanceof Error ? err.message : String(err),
@@ -149,7 +160,7 @@ async function handleVoice(
   ws: WebSocket,
   req: IncomingMessage,
   opts: GatewayOptions,
-  sessions: Map<WebSocket, { turn: AgentTurn; stt?: SttStream }>,
+  sessions: Map<WebSocket, { turn: AgentTurn; stt?: SttStream; userId: string }>,
 ): Promise<void> {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   if (!authorize(req, opts.token, url)) {
@@ -160,11 +171,6 @@ async function handleVoice(
   const userId = url.searchParams.get("userId") || "default";
   const mode = url.searchParams.get("mode") === "handsfree" ? "handsfree" : "ptt";
   const config = await opts.store.get(userId);
-  if (!config.repo.url) {
-    ws.send(JSON.stringify({ type: "error", message: "configure a repo URL first" }));
-    ws.close(4400, "no repo");
-    return;
-  }
   if (!opts.deepgramKey) {
     ws.send(
       JSON.stringify({
@@ -219,7 +225,7 @@ async function handleVoice(
 
   if (mode === "handsfree") attachStt();
 
-  sessions.set(ws, { turn, stt });
+  sessions.set(ws, { turn, stt, userId });
   ws.send(
     JSON.stringify({
       type: "ready",
@@ -260,6 +266,30 @@ async function handleVoice(
     void turn.close();
     sessions.delete(ws);
   });
+}
+
+async function teardownUserSessions(
+  opts: GatewayOptions,
+  sessions: Map<WebSocket, { turn: AgentTurn; stt?: SttStream; userId: string }>,
+  userId: string,
+): Promise<string[]> {
+  const live: WebSocket[] = [];
+  for (const [ws, session] of sessions) {
+    if (session.userId === userId) live.push(ws);
+  }
+  for (const ws of live) {
+    const session = sessions.get(ws);
+    session?.stt?.close();
+    await session?.turn.close();
+    sessions.delete(ws);
+    try {
+      ws.close(4000, "killed");
+    } catch {
+      /* already closed */
+    }
+  }
+  if (opts.boxCommand && opts.boxCommand.length > 0) return [];
+  return killSessionBoxes(opts.dockerBin, userId);
 }
 
 async function openBox(

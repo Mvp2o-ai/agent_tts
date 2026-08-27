@@ -2,7 +2,11 @@
 
 A **mobile-only** voice remote for a coding agent that runs in a container on a host you operate.
 
-You speak into your phone. A harness (Claude Code, Cursor CLI, Gemini CLI, or Codex CLI) works in your git repo inside a Docker container. Replies come back as speech. There is no web version and no hosted service — bring your own host, Docker engine, model keys, git PAT, Deepgram key, and ElevenLabs key.
+You speak into your phone. A harness (Claude Code, Cursor CLI, Gemini CLI, or Codex CLI) works in an empty Docker workspace; you tell it which git remotes to clone. Replies come back as speech. There is no web version. This repository is the self-hosted distribution — bring your own host, Docker engine, model keys, git PAT, Deepgram key, and ElevenLabs key.
+
+> **Setting this up with a coding agent?** Give it this repository and tell it
+> to follow [`AGENTS.md`](./AGENTS.md). That guide defines the clean-clone
+> bootstrap, secrets boundary, verification gates, and architecture contracts.
 
 ## What you get
 
@@ -18,7 +22,7 @@ You speak into your phone. A harness (Claude Code, Cursor CLI, Gemini CLI, or Co
 
 ```
 mobile (Expo RN, native audio)
-   │  WebSocket: PCM 16 kHz up / MP3 + JSON events down
+   │  WebSocket: PCM 16 kHz up / PCM 24 kHz + JSON events down
    ▼
 gateway (Node, headless API)
    │  Deepgram live STT · ElevenLabs streaming TTS
@@ -26,7 +30,7 @@ gateway (Node, headless API)
    ▼
 agentbox (Docker, one container per session)
    adapter JSON-lines on stdin/stdout
-   harness cwd = clone of your repo
+   harness cwd = /workspace (empty; agent clones)
 ```
 
 ## Run the gateway (any Linux/macOS host with Docker)
@@ -53,7 +57,9 @@ npm install
 npx expo run:ios      # or run:android — dev client, not Expo Go
 ```
 
-Everything is configured in-app (Settings tab): gateway URL + token, repo URL, git PAT, harness, that harness's API key, stop word, voice. Config is stored by the gateway in SQLite.
+Everything is configured in-app (Settings tab): gateway URL + token, git PAT, optional git host, harness, that harness's API key, stop word, voice. Config is stored by the gateway in SQLite.
+
+The agentbox image includes `git` and `gh`. The gateway injects a host-scoped PAT and **does not clone**. Tell the agent which remotes to clone (one or many). Public HTTPS clones work with an empty PAT. For private repos or `git push` / PRs, use a **fine-grained GitHub PAT** for those repos: Contents + Pull requests (read/write), short expiry, no admin/workflow scopes. There is no GitHub permission that is “PRs only” while still allowing a branch push. Do not use SSH remotes; there is no `ssh-agent` in the box.
 
 Harness keys (BYO):
 
@@ -69,11 +75,11 @@ Harness keys (BYO):
 ```bash
 curl -sS -H "Authorization: Bearer $GATEWAY_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"text":"What is in this repo?"}' \
+  -d '{"text":"Clone https://github.com/octocat/Hello-World.git and list the files."}' \
   http://localhost:4100/v1/debug/prompt
 ```
 
-Clones the configured repo, runs the selected CLI in the box, streams NDJSON events back. Use it to prove a harness works before touching audio.
+Starts an empty `/workspace`, runs the selected CLI in the box, streams NDJSON events back. The prompt is what clones. Use it to prove a harness works before touching audio.
 
 ## Repo layout
 

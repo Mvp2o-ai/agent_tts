@@ -1,6 +1,7 @@
 import {
   configUrl,
   connectionError,
+  killSessionUrl,
   type Connection,
   voiceUrl,
 } from "./protocol";
@@ -82,4 +83,29 @@ export async function saveConfig(
   });
   if (!res.ok) throw new Error(await readError(res, "config save failed"));
   return (await res.json()) as UserConfig;
+}
+
+export async function killSession(
+  conn: Connection,
+): Promise<{ ok: boolean; killed: number }> {
+  const err = connectionError(conn);
+  if (err) throw new Error(err);
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 20000);
+  try {
+    const res = await fetch(killSessionUrl(conn), {
+      method: "POST",
+      headers: headers(conn),
+      signal: ac.signal,
+    });
+    if (!res.ok) throw new Error(await readError(res, "kill session failed"));
+    return (await res.json()) as { ok: boolean; killed: number };
+  } catch (cause) {
+    if (cause instanceof Error && cause.name === "AbortError") {
+      throw new Error("kill session timed out");
+    }
+    throw cause;
+  } finally {
+    clearTimeout(timer);
+  }
 }

@@ -75,6 +75,11 @@ export function configUrl(conn: Connection): string {
   return `${base}/v1/config?userId=${encodeURIComponent(conn.userId)}`;
 }
 
+export function killSessionUrl(conn: Connection): string {
+  const base = normalizeGatewayUrl(conn.gatewayUrl);
+  return `${base}/v1/session/kill?userId=${encodeURIComponent(conn.userId)}`;
+}
+
 function looksLikeJsonObject(text: string): boolean {
   const t = text.trim();
   return t.startsWith("{") && t.endsWith("}");
@@ -147,7 +152,7 @@ export function wsCloseMessage(code: number, reason: string): string {
     case 1006:
       return extra || "connection lost";
     case 4400:
-      return extra || "configure a repo URL first";
+      return extra || "bad request";
     case 4401:
       return extra || "unauthorized — check gateway token";
     case 4403:

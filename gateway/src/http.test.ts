@@ -13,7 +13,7 @@ describe("gateway http", () => {
   it("serves health and round-trips a debug prompt through the fake box", async () => {
     const store = new MemoryConfigStore();
     await store.save("default", {
-      repo: { url: "https://example.com/repo.git", credential: "" },
+      repo: { url: "", credential: "" },
       harness: "claude-code",
     });
     const { server } = createGateway({

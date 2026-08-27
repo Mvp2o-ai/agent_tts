@@ -3,10 +3,9 @@
  *
  * Env:
  *  AGENT_TTS_HARNESS          claude-code | cursor-cli | gemini-cli | codex
- *  AGENT_TTS_REPO_URL         git remote to clone/pull
- *  AGENT_TTS_GIT_CREDENTIAL   PAT injected into https remotes
- *  AGENT_TTS_GIT_BRANCH       optional default branch
- *  AGENT_TTS_WORKSPACE        default /workspace
+ *  AGENT_TTS_GIT_CREDENTIAL   PAT for git extraheader + GH_TOKEN
+ *  AGENT_TTS_GIT_HOST         extraheader host (default github.com)
+ *  AGENT_TTS_WORKSPACE        default /workspace (starts empty; agent clones)
  *
  * Model keys (ANTHROPIC_API_KEY, CURSOR_API_KEY, GEMINI_API_KEY,
  * OPENAI_API_KEY, …) are passed through from the gateway.
@@ -14,7 +13,7 @@
  */
 
 import { createInterface } from "node:readline";
-import { ensureRepo, installHarnessGitAuth, redact } from "./git.js";
+import { installHarnessGitAuth } from "./git.js";
 import type { Harness } from "./harness.js";
 import {
   encodeOutbound,
@@ -32,26 +31,12 @@ function emit(msg: BoxOutbound): void {
 }
 
 async function main(): Promise<void> {
-  const url = process.env.AGENT_TTS_REPO_URL;
-  if (!url) {
-    emit({ type: "error", message: "AGENT_TTS_REPO_URL is required" });
-    process.exit(1);
-  }
-
-  try {
-    await ensureRepo({
-      workspace,
-      url,
-      credential: process.env.AGENT_TTS_GIT_CREDENTIAL ?? "",
-      branch: process.env.AGENT_TTS_GIT_BRANCH || undefined,
-    });
-    // Harness git (fetch/pull/push) inherits extraheader; never written to .git/config.
-    installHarnessGitAuth(url, process.env.AGENT_TTS_GIT_CREDENTIAL ?? "");
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    emit({ type: "error", message: `repo setup failed: ${redact(message)}` });
-    process.exit(1);
-  }
+  const credential = process.env.AGENT_TTS_GIT_CREDENTIAL ?? "";
+  const host =
+    process.env.AGENT_TTS_GIT_HOST || process.env.AGENT_TTS_REPO_URL || "";
+  // Auth only. Do not clone: the harness owns remotes, branches, and PRs.
+  installHarnessGitAuth(host, credential);
+  delete process.env.AGENT_TTS_GIT_CREDENTIAL;
 
   let harness: Harness;
   try {

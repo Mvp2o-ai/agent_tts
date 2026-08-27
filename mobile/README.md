@@ -36,7 +36,7 @@ Nothing is read from environment variables or committed secrets. Settings live
 in **device-local AsyncStorage** (`agent_tts.deviceSettings.v1`):
 
 - Gateway URL, gateway token, user id
-- Repo URL, git PAT, default branch
+- Git PAT, optional git host
 - Harness, model API keys, stop word, ElevenLabs voice id
 
 They survive app restart on that phone. They are **not encrypted at rest**

@@ -4,6 +4,7 @@ import {
   classifyIncomingFrame,
   connectionError,
   httpToWs,
+  killSessionUrl,
   nextReconnectDelay,
   validateReadyAudioFormat,
   voiceUrl,
@@ -24,6 +25,14 @@ describe("protocol", () => {
     assert.match(url, /^ws:\/\/10\.0\.0\.12:8787\/v1\/voice\?/);
     assert.match(url, /mode=ptt/);
     assert.match(url, /userId=ken/);
+    assert.equal(
+      killSessionUrl({
+        gatewayUrl: "https://gw.example",
+        token: "t",
+        userId: "ken",
+      }),
+      "https://gw.example/v1/session/kill?userId=ken",
+    );
   });
 
   it("rejects incomplete connection fields", () => {
@@ -101,7 +110,7 @@ describe("protocol", () => {
 
   it("maps gateway close codes to operator-facing text without leaking tokens", () => {
     assert.match(wsCloseMessage(4401, ""), /unauthorized/);
-    assert.match(wsCloseMessage(4400, ""), /repo/);
+    assert.match(wsCloseMessage(4400, ""), /bad request/);
     assert.equal(wsCloseMessage(1000, "bye"), "bye");
   });
 });
