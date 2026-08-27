@@ -92,4 +92,11 @@ Box → gateway: `chunk` · `tool_event` · `done` · `aborted` · `error` (JSON
 
 ## License
 
-MIT
+GNU Affero General Public License v3.0 (AGPL-3.0). You can self-host,
+modify, and redistribute the project under the license terms. Operators who
+offer a modified version over a network must make that version's corresponding
+source available to its users.
+
+An official managed service may be offered separately. Hosting, billing,
+provisioning, and operations around the open-source runtime can be commercial
+without making this repository source-available-only.
