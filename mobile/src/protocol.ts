@@ -80,6 +80,12 @@ export function killSessionUrl(conn: Connection): string {
   return `${base}/v1/session/kill?userId=${encodeURIComponent(conn.userId)}`;
 }
 
+/** New session = new container: the gateway exits and the platform recreates it. */
+export function resetSessionUrl(conn: Connection): string {
+  const base = normalizeGatewayUrl(conn.gatewayUrl);
+  return `${base}/v1/session/reset`;
+}
+
 function looksLikeJsonObject(text: string): boolean {
   const t = text.trim();
   return t.startsWith("{") && t.endsWith("}");

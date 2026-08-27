@@ -20,8 +20,6 @@ describe("gateway http", () => {
       token: "test-token",
       store,
       deepgramKey: "test-stt-key",
-      dockerBin: "docker",
-      agentboxImage: "unused",
       boxCommand: ["node", "--import", "tsx", fakeBox],
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
@@ -73,6 +71,45 @@ describe("gateway http", () => {
       assert.equal(ready.mode, "ptt");
       assert.equal(ready.harness, "claude-code");
       assert.deepEqual(ready.audioFormat, VOICE_AUDIO_FORMAT);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((err) => (err ? reject(err) : resolve())),
+      );
+      await store.close();
+    }
+  });
+
+  it("resets by closing sessions and invoking onReset", async () => {
+    const store = new MemoryConfigStore();
+    let resetCalled = false;
+    const { server, sessions } = createGateway({
+      token: "test-token",
+      store,
+      deepgramKey: "test-stt-key",
+      boxCommand: ["node", "--import", "tsx", fakeBox],
+      onReset: () => {
+        resetCalled = true;
+      },
+    });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const { port } = server.address() as AddressInfo;
+    try {
+      const denied = await fetch(
+        `http://127.0.0.1:${port}/v1/session/reset`,
+        { method: "POST" },
+      );
+      assert.equal(denied.status, 401);
+      assert.equal(resetCalled, false);
+
+      const res = await fetch(`http://127.0.0.1:${port}/v1/session/reset`, {
+        method: "POST",
+        headers: { authorization: "Bearer test-token" },
+      });
+      assert.equal(res.status, 200);
+      assert.deepEqual(await res.json(), { ok: true, restarting: true });
+      await new Promise((r) => setTimeout(r, 50));
+      assert.equal(resetCalled, true);
+      assert.equal(sessions.size, 0);
     } finally {
       await new Promise<void>((resolve, reject) =>
         server.close((err) => (err ? reject(err) : resolve())),

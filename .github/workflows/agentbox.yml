@@ -1,9 +1,9 @@
-name: agentbox image
+name: agent image
 
 on:
   push:
     branches: [main]
-    paths: ["agentbox/**"]
+    paths: ["agentbox/**", "gateway/**", "package.json", "package-lock.json"]
   workflow_dispatch:
 
 jobs:
@@ -21,8 +21,9 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/build-push-action@v6
         with:
-          context: agentbox
+          context: .
+          file: gateway/Dockerfile
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}/agentbox:latest
-            ghcr.io/${{ github.repository }}/agentbox:${{ github.sha }}
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:${{ github.sha }}

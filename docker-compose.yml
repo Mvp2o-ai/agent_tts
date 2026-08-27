@@ -1,20 +1,21 @@
+# One service = one agent. Deploy this compose file once per agent identity.
+# `restart: always` is load-bearing: session reset exits the process and the
+# recreated/restarted container must come back automatically. For a truly
+# fresh filesystem on reset, managed hosts recreate from the image; on raw
+# Docker run `docker compose up -d --force-recreate` or use a supervisor
+# around `docker run --rm`.
 services:
-  gateway:
+  agent:
     build:
       context: .
       dockerfile: gateway/Dockerfile
-    restart: unless-stopped
+    restart: always
     ports:
       - "4100:4100"
     env_file:
       - .env
-    environment:
-      CONFIG_DB: /data/agent_tts.db
-      AGENTBOX_IMAGE: agent_tts-agentbox:local
-      DOCKER_BIN: docker
     volumes:
       - agent_tts_data:/data
-      - /var/run/docker.sock:/var/run/docker.sock
 
 volumes:
   agent_tts_data:

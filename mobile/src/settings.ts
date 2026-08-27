@@ -9,9 +9,16 @@ export const HARNESSES: { id: HarnessId; label: string; keyEnv: string }[] = [
 
 export const HARNESS_IDS: readonly HarnessId[] = HARNESSES.map((h) => h.id);
 
-export interface DeviceSettings {
+export interface AgentProfile {
+  id: string;
+  name: string;
   gatewayUrl: string;
   token: string;
+}
+
+export interface DeviceSettings {
+  agents: AgentProfile[];
+  activeAgentId: string;
   userId: string;
   repoUrl: string;
   gitPat: string;
@@ -25,8 +32,10 @@ export interface DeviceSettings {
 export const SETTINGS_STORAGE_KEY = "agent_tts.deviceSettings.v1";
 
 export const DEFAULT_DEVICE_SETTINGS: DeviceSettings = {
-  gatewayUrl: "http://",
-  token: "",
+  agents: [
+    { id: "agent-1", name: "Agent 1", gatewayUrl: "http://", token: "" },
+  ],
+  activeAgentId: "agent-1",
   userId: "default",
   repoUrl: "",
   gitPat: "",
@@ -54,21 +63,79 @@ function asModelKeys(value: unknown): Record<string, string> {
   return out;
 }
 
+function cloneDefaultAgents(): AgentProfile[] {
+  return DEFAULT_DEVICE_SETTINGS.agents.map((a) => ({ ...a }));
+}
+
+function parseAgentProfile(value: unknown): AgentProfile | null {
+  if (!value || typeof value !== "object") return null;
+  const o = value as Record<string, unknown>;
+  if (
+    typeof o.id !== "string" ||
+    typeof o.name !== "string" ||
+    typeof o.gatewayUrl !== "string" ||
+    typeof o.token !== "string"
+  ) {
+    return null;
+  }
+  return {
+    id: o.id,
+    name: o.name,
+    gatewayUrl: o.gatewayUrl,
+    token: o.token,
+  };
+}
+
+function resolveAgents(o: Record<string, unknown>): AgentProfile[] {
+  if (Array.isArray(o.agents)) {
+    const agents = o.agents
+      .map(parseAgentProfile)
+      .filter((a): a is AgentProfile => a !== null);
+    return agents.length > 0 ? agents : cloneDefaultAgents();
+  }
+  if (typeof o.gatewayUrl === "string" && typeof o.token === "string") {
+    return [
+      {
+        id: "agent-1",
+        name: "Agent 1",
+        gatewayUrl: o.gatewayUrl,
+        token: o.token,
+      },
+    ];
+  }
+  return cloneDefaultAgents();
+}
+
+function resolveActiveAgentId(
+  agents: AgentProfile[],
+  value: unknown,
+): string {
+  if (typeof value === "string" && agents.some((a) => a.id === value)) {
+    return value;
+  }
+  return agents[0]!.id;
+}
+
+export function activeAgent(s: DeviceSettings): AgentProfile {
+  return s.agents.find((a) => a.id === s.activeAgentId) ?? s.agents[0]!;
+}
+
 export function parseDeviceSettings(raw: string): DeviceSettings {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw) as unknown;
   } catch {
-    return { ...DEFAULT_DEVICE_SETTINGS };
+    return { ...DEFAULT_DEVICE_SETTINGS, agents: cloneDefaultAgents() };
   }
   if (!parsed || typeof parsed !== "object") {
-    return { ...DEFAULT_DEVICE_SETTINGS };
+    return { ...DEFAULT_DEVICE_SETTINGS, agents: cloneDefaultAgents() };
   }
   const o = parsed as Record<string, unknown>;
   const harness = asString(o.harness, DEFAULT_DEVICE_SETTINGS.harness);
+  const agents = resolveAgents(o);
   return {
-    gatewayUrl: asString(o.gatewayUrl, DEFAULT_DEVICE_SETTINGS.gatewayUrl),
-    token: asString(o.token, ""),
+    agents,
+    activeAgentId: resolveActiveAgentId(agents, o.activeAgentId),
     userId: asString(o.userId, DEFAULT_DEVICE_SETTINGS.userId) || "default",
     repoUrl: asString(o.repoUrl, ""),
     gitPat: asString(o.gitPat, ""),
@@ -82,8 +149,8 @@ export function parseDeviceSettings(raw: string): DeviceSettings {
 
 export function serializeDeviceSettings(settings: DeviceSettings): string {
   return JSON.stringify({
-    gatewayUrl: settings.gatewayUrl,
-    token: settings.token,
+    agents: settings.agents,
+    activeAgentId: settings.activeAgentId,
     userId: settings.userId,
     repoUrl: settings.repoUrl,
     gitPat: settings.gitPat,

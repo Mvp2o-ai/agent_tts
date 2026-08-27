@@ -2,6 +2,7 @@ import {
   configUrl,
   connectionError,
   killSessionUrl,
+  resetSessionUrl,
   type Connection,
   voiceUrl,
 } from "./protocol";
@@ -83,6 +84,36 @@ export async function saveConfig(
   });
   if (!res.ok) throw new Error(await readError(res, "config save failed"));
   return (await res.json()) as UserConfig;
+}
+
+/**
+ * Ask the agent container to replace itself: sessions close, the gateway
+ * exits, and the operator's platform recreates the container from the image.
+ * Expect the connection to drop and the agent to be back in ~10–30s.
+ */
+export async function resetSession(
+  conn: Connection,
+): Promise<{ ok: boolean; restarting: boolean }> {
+  const err = connectionError(conn);
+  if (err) throw new Error(err);
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 20000);
+  try {
+    const res = await fetch(resetSessionUrl(conn), {
+      method: "POST",
+      headers: headers(conn),
+      signal: ac.signal,
+    });
+    if (!res.ok) throw new Error(await readError(res, "reset failed"));
+    return (await res.json()) as { ok: boolean; restarting: boolean };
+  } catch (cause) {
+    if (cause instanceof Error && cause.name === "AbortError") {
+      throw new Error("reset timed out");
+    }
+    throw cause;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function killSession(

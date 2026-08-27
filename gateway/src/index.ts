@@ -1,8 +1,10 @@
 /**
  * agent_tts gateway — headless API for the mobile voice remote.
  *
- * Operators run this on a host that can spawn Docker containers.
- * Persistence is a SQLite file (bring your own volume). No web UI.
+ * Single-agent appliance: this process, the adapter, and one harness share
+ * one disposable container. New session = process exit; the platform
+ * recreates the container from the immutable image. Only the SQLite config
+ * volume survives. No Docker socket, no nested containers.
  */
 
 import { createGateway } from "./http.js";
@@ -20,16 +22,20 @@ const store =
 
 const boxCommand = process.env.AGENTBOX_COMMAND?.trim()
   ? process.env.AGENTBOX_COMMAND.split(" ").filter(Boolean)
-  : undefined;
+  : ["node", "/opt/adapter/dist/index.js"];
 
 const { server } = createGateway({
   token,
   store,
   deepgramKey: process.env.DEEPGRAM_API_KEY,
   elevenKey: process.env.ELEVENLABS_API_KEY,
-  dockerBin: process.env.DOCKER_BIN ?? "docker",
-  agentboxImage: process.env.AGENTBOX_IMAGE ?? "agent_tts-agentbox:local",
   boxCommand,
+  workspaceDir: process.env.WORKSPACE_DIR ?? "/workspace",
+  onReset: () => {
+    process.stderr.write("session reset: exiting for container recreate\n");
+    server.close();
+    void store.close().finally(() => process.exit(0));
+  },
 });
 
 server.listen(PORT, () => {

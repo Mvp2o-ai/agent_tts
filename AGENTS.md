@@ -11,19 +11,26 @@ stubs and do not claim live validation when only mocks ran.
 
 ```
 React Native mobile app
-  → gateway (Deepgram STT, ElevenLabs TTS, SQLite config)
-  → ephemeral Docker agentbox
+  → agent container (gateway + adapter child process + one harness)
   → Claude Code, Cursor CLI, Gemini CLI, or Codex CLI
 ```
 
 Preserve these decisions:
 
 - There is no web or desktop client.
-- Operators bring their own host, Docker engine, persistence volume, vendor
+- Operators bring their own host, container runtime, persistence volume, vendor
   keys, and git credentials. The harness clones remotes; the adapter does not.
 - SQLite is the only configuration persistence dependency.
-- One non-root container is created per voice session. Work not committed or
-  pushed before a container exits is intentionally not durable.
+- One deployed container = one agent. Gateway and harness live in the same
+  image; the adapter runs as a non-root child process. No Docker socket, no
+  nested containers. A new session means the gateway process exits and the
+  operator’s platform recreates the container from the immutable image
+  (managed hosts and Kubernetes do this; plain `docker restart` does not —
+  use recreate semantics such as `docker run --rm` under a supervisor or
+  Compose force-recreate). Only the SQLite config volume survives. Work not
+  committed or pushed before a container exits is intentionally not durable.
+- The mobile app stores multiple agent endpoints (URL + token) and switches
+  between them. Two agents = two deployments.
 - Harnesses run fully unattended because the container has no TTY.
 - The mobile app stays React Native/Expo. Swift and Kotlin are limited to the
   native full-duplex audio module.
@@ -52,7 +59,7 @@ npm ci
 npm run typecheck
 npm test
 npm run build
-npm run image:agentbox
+docker build -t agent_tts:local -f gateway/Dockerfile .
 ```
 
 Set up the mobile workspace separately:
@@ -150,11 +157,12 @@ Then start all configured tunnels:
 ngrok start --all
 ```
 
-Put the resulting `https://…ngrok…` URL directly into the app's **Gateway
-URL** field. Unreserved ngrok URLs can change when ngrok restarts. For regular
-private use, a stable Tailscale hostname is preferable; for an always-on
-deployment, use a VPS with TLS. Expose only gateway port `4100`, require a
-strong `GATEWAY_TOKEN`, and never expose the Docker socket or Docker API.
+Put the resulting `https://…ngrok…` URL directly into the active agent's
+**Gateway URL** field in the app. Unreserved ngrok URLs can change when ngrok
+restarts. For regular private use, a stable Tailscale hostname is preferable;
+for an always-on deployment, use a VPS with TLS. Expose only gateway port
+`4100`, require a strong `GATEWAY_TOKEN`, and never expose the Docker socket
+or Docker API.
 
 ## Verification gates
 
@@ -172,15 +180,17 @@ npm run typecheck
 npm test
 ```
 
-For agentbox or harness changes:
+For image or harness changes:
 
-1. Rebuild `agent_tts-agentbox:local`.
-2. Verify the container runs as the non-root `agent` user.
-3. Inspect the installed CLI's current `--help`; do not rely on remembered
+1. Rebuild `agent_tts:local` from `gateway/Dockerfile`.
+2. Verify the container runs as a non-root user.
+3. Verify the adapter spawns as a child process of the gateway.
+4. Inspect the installed CLI's current `--help`; do not rely on remembered
    flags.
-4. Have the harness clone a remote, inspect it, write a file, stream output,
+5. Have the harness clone a remote, inspect it, write a file, stream output,
    continue, and abort.
-5. Confirm the `--rm` container and temporary environment file are removed.
+6. Confirm a new session is a fresh container from the image (not an in-place
+   `docker restart`) and that only the SQLite volume survives.
 
 For voice-path changes:
 

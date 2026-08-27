@@ -4,7 +4,7 @@ import type { ConfigStore } from "./config-store.js";
 import type { UserConfig } from "./config-schema.js";
 import { HARNESS_ORDER } from "./config-schema.js";
 import { spawnCommandBox, type BoxConnection } from "./box-client.js";
-import { killSessionBoxes, spawnDockerBox } from "./docker-box.js";
+import { harnessEnv } from "./harness-env.js";
 import { AgentTurn, type VoiceSink } from "./agent-turn.js";
 import { openDeepgram, type SttStream } from "./deepgram.js";
 import { VOICE_AUDIO_FORMAT } from "./elevenlabs.js";
@@ -16,9 +16,15 @@ export interface GatewayOptions {
   store: ConfigStore;
   deepgramKey?: string;
   elevenKey?: string;
-  dockerBin: string;
-  agentboxImage: string;
-  boxCommand?: string[];
+  /** Adapter argv, spawned as a child process per session. */
+  boxCommand: string[];
+  /** Harness working directory (empty at container start; agent clones). */
+  workspaceDir?: string;
+  /**
+   * Invoked by POST /v1/session/reset after sessions close. Production exits
+   * the process so the platform recreates the container from the image.
+   */
+  onReset?: () => void;
 }
 
 export function createGateway(opts: GatewayOptions) {
@@ -84,8 +90,30 @@ async function handleHttp(
       return;
     }
     const userId = url.searchParams.get("userId") || "default";
-    const killed = await teardownUserSessions(opts, sessions, userId);
-    json(res, 200, { ok: true, killed: killed.length });
+    const killed = await teardownUserSessions(sessions, userId);
+    json(res, 200, { ok: true, killed });
+    return;
+  }
+
+  // New session = new container. Close everything, then let onReset exit the
+  // process; the operator's platform recreates the container from the image.
+  if (req.method === "POST" && url.pathname === "/v1/session/reset") {
+    if (!authorize(req, opts.token, url)) {
+      json(res, 401, { error: "unauthorized" });
+      return;
+    }
+    for (const [ws, session] of sessions) {
+      session.stt?.close();
+      await session.turn.close();
+      sessions.delete(ws);
+      try {
+        ws.close(4000, "reset");
+      } catch {
+        /* already closed */
+      }
+    }
+    json(res, 200, { ok: true, restarting: Boolean(opts.onReset) });
+    res.once("close", () => opts.onReset?.());
     return;
   }
 
@@ -117,7 +145,7 @@ async function debugPrompt(
 
   let box: BoxConnection;
   try {
-    box = await openBox(opts, config, `agent-tts-${userId}-${Date.now()}`);
+    box = openBox(opts, config);
   } catch (err) {
     json(res, 503, {
       error: err instanceof Error ? err.message : String(err),
@@ -184,7 +212,7 @@ async function handleVoice(
 
   let box: BoxConnection;
   try {
-    box = await openBox(opts, config, `agent-tts-${userId}-${Date.now()}`);
+    box = openBox(opts, config);
   } catch (err) {
     ws.send(
       JSON.stringify({
@@ -269,10 +297,9 @@ async function handleVoice(
 }
 
 async function teardownUserSessions(
-  opts: GatewayOptions,
   sessions: Map<WebSocket, { turn: AgentTurn; stt?: SttStream; userId: string }>,
   userId: string,
-): Promise<string[]> {
+): Promise<number> {
   const live: WebSocket[] = [];
   for (const [ws, session] of sessions) {
     if (session.userId === userId) live.push(ws);
@@ -288,26 +315,15 @@ async function teardownUserSessions(
       /* already closed */
     }
   }
-  if (opts.boxCommand && opts.boxCommand.length > 0) return [];
-  return killSessionBoxes(opts.dockerBin, userId);
+  return live.length;
 }
 
-async function openBox(
-  opts: GatewayOptions,
-  config: UserConfig,
-  name: string,
-): Promise<BoxConnection> {
-  if (opts.boxCommand && opts.boxCommand.length > 0) {
-    const { harnessEnv } = await import("./docker-box.js");
-    return spawnCommandBox(opts.boxCommand, harnessEnv(config));
-  }
-  const { box } = await spawnDockerBox({
-    dockerBin: opts.dockerBin,
-    image: opts.agentboxImage,
-    name,
-    config,
-  });
-  return box;
+function openBox(opts: GatewayOptions, config: UserConfig): BoxConnection {
+  if (!opts.boxCommand.length) throw new Error("boxCommand is empty");
+  return spawnCommandBox(
+    opts.boxCommand,
+    harnessEnv(config, opts.workspaceDir),
+  );
 }
 
 function authorize(req: IncomingMessage, token: string, url: URL): boolean {

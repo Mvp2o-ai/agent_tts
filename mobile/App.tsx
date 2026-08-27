@@ -10,9 +10,20 @@ import {
   Text,
   View,
 } from "react-native";
-import { fetchConfig, killSession, saveConfig, type HarnessId } from "./src/api";
+import {
+  fetchConfig,
+  killSession,
+  resetSession,
+  saveConfig,
+  type HarnessId,
+} from "./src/api";
 import { normalizeGatewayUrl } from "./src/protocol";
-import { HARNESSES, type DeviceSettings } from "./src/settings";
+import {
+  activeAgent,
+  HARNESSES,
+  type AgentProfile,
+  type DeviceSettings,
+} from "./src/settings";
 import { useDeviceSettings } from "./src/useDeviceSettings";
 import { useVoiceSession, type VoiceMode } from "./src/useVoiceSession";
 import {
@@ -54,13 +65,14 @@ export default function App() {
     null,
   );
 
+  const agent = activeAgent(settings);
   const conn = useMemo(
     () => ({
-      gatewayUrl: normalizeGatewayUrl(settings.gatewayUrl),
-      token: settings.token,
+      gatewayUrl: normalizeGatewayUrl(agent.gatewayUrl),
+      token: agent.token,
       userId: settings.userId,
     }),
-    [settings.gatewayUrl, settings.token, settings.userId],
+    [agent.gatewayUrl, agent.token, settings.userId],
   );
 
   const session = useVoiceSession(conn);
@@ -71,6 +83,47 @@ export default function App() {
 
   const patch = (partial: Partial<DeviceSettings>) =>
     setSettings((prev) => ({ ...prev, ...partial }));
+
+  const patchActiveAgent = (partial: Partial<AgentProfile>) =>
+    setSettings((prev) => {
+      const current = activeAgent(prev);
+      return {
+        ...prev,
+        agents: prev.agents.map((a) =>
+          a.id === current.id ? { ...a, ...partial } : a,
+        ),
+      };
+    });
+
+  const selectAgent = (id: string) =>
+    setSettings((prev) => ({ ...prev, activeAgentId: id }));
+
+  const addAgent = () => {
+    const id = `agent-${Date.now()}`;
+    const profile: AgentProfile = {
+      id,
+      name: "New agent",
+      gatewayUrl: "http://",
+      token: "",
+    };
+    setSettings((prev) => ({
+      ...prev,
+      agents: [...prev.agents, profile],
+      activeAgentId: id,
+    }));
+  };
+
+  const removeAgent = (id: string) =>
+    setSettings((prev) => {
+      if (prev.agents.length <= 1) return prev;
+      const agents = prev.agents.filter((a) => a.id !== id);
+      const activeAgentId =
+        prev.activeAgentId === id ||
+        !agents.some((a) => a.id === prev.activeAgentId)
+          ? agents[0]!.id
+          : prev.activeAgentId;
+      return { ...prev, agents, activeAgentId };
+    });
 
   useEffect(() => {
     if (!configMsg) return;
@@ -142,7 +195,7 @@ export default function App() {
   function onKillSession() {
     Alert.alert(
       "Kill agent session?",
-      "This aborts the harness and force-removes its Docker container. Uncommitted work in that box is lost.",
+      "This aborts the harness and stops its process. Uncommitted work in this session is lost.",
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -157,13 +210,47 @@ export default function App() {
                 setConfigOk(true);
                 setConfigMsg(
                   result.killed > 0
-                    ? `Killed ${result.killed} container${result.killed === 1 ? "" : "s"}.`
-                    : "Session torn down. No leftover containers.",
+                    ? `Killed ${result.killed} session${result.killed === 1 ? "" : "s"}.`
+                    : "Session torn down.",
                 );
               } catch (err) {
                 setConfigOk(false);
                 setConfigMsg(
                   err instanceof Error ? err.message : "Kill failed.",
+                );
+              }
+            })();
+          },
+        },
+      ],
+    );
+  }
+
+  function onNewSession() {
+    Alert.alert(
+      "New session?",
+      "The agent container exits and is recreated fresh from its image: clean disk, clean memory, new git clone. Anything not pushed is lost. Reconnect in ~10–30s.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "New session",
+          style: "destructive",
+          onPress: () => {
+            void (async () => {
+              session.abort();
+              session.disconnect();
+              try {
+                const result = await resetSession(conn);
+                setConfigOk(true);
+                setConfigMsg(
+                  result.restarting
+                    ? "Agent is restarting fresh. Reconnect shortly."
+                    : "Sessions closed; gateway did not restart (no onReset).",
+                );
+              } catch (err) {
+                setConfigOk(false);
+                setConfigMsg(
+                  err instanceof Error ? err.message : "Reset failed.",
                 );
               }
             })();
@@ -263,11 +350,19 @@ export default function App() {
             />
             <Button
               style={styles.actionItem}
-              tone="danger"
+              tone="ghost"
               label="Kill session"
-              accessibilityHint="Force-removes the agent's Docker container."
-              icon={<TrashIcon size={16} color={color.danger} />}
+              accessibilityHint="Aborts the harness and stops its process."
+              icon={<StopIcon size={15} color={color.textMuted} />}
               onPress={onKillSession}
+            />
+            <Button
+              style={styles.actionItem}
+              tone="danger"
+              label="New session"
+              accessibilityHint="Restarts the agent container from a clean image."
+              icon={<TrashIcon size={16} color={color.danger} />}
+              onPress={onNewSession}
             />
           </View>
 
@@ -287,21 +382,76 @@ export default function App() {
             contentContainerStyle={styles.settingsContent}
           >
             <SectionLabel icon={<LinkIcon size={13} color={color.textMuted} />}>
-              Gateway
+              Agents
             </SectionLabel>
             <Card>
+              <View style={styles.agentList}>
+                {settings.agents.map((profile) => {
+                  const selected = profile.id === settings.activeAgentId;
+                  const canDelete = settings.agents.length > 1;
+                  return (
+                    <Pressable
+                      key={profile.id}
+                      accessibilityRole="radio"
+                      accessibilityState={{ selected }}
+                      accessibilityLabel={profile.name}
+                      onPress={() => selectAgent(profile.id)}
+                      style={[
+                        styles.agentRow,
+                        selected && styles.agentRowActive,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.agentRowName,
+                          selected && styles.agentRowNameActive,
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {profile.name}
+                      </Text>
+                      {selected ? (
+                        <CheckIcon size={14} color={color.accent} />
+                      ) : null}
+                      {canDelete ? (
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={`Delete ${profile.name}`}
+                          hitSlop={8}
+                          onPress={() => removeAgent(profile.id)}
+                          style={styles.agentDelete}
+                        >
+                          <TrashIcon size={15} color={color.danger} />
+                        </Pressable>
+                      ) : null}
+                    </Pressable>
+                  );
+                })}
+              </View>
+              <Button
+                tone="neutral"
+                label="Add agent"
+                onPress={addAgent}
+                style={styles.agentAdd}
+              />
+              <Field
+                label="Name"
+                value={agent.name}
+                onChange={(v) => patchActiveAgent({ name: v })}
+                placeholder="Agent 1"
+              />
               <Field
                 label="Gateway URL"
-                value={settings.gatewayUrl}
-                onChange={(v) => patch({ gatewayUrl: v })}
+                value={agent.gatewayUrl}
+                onChange={(v) => patchActiveAgent({ gatewayUrl: v })}
                 autoCapitalize="none"
                 mono
                 placeholder="https://your-host.example.com"
               />
               <Field
                 label="Gateway token"
-                value={settings.token}
-                onChange={(v) => patch({ token: v })}
+                value={agent.token}
+                onChange={(v) => patchActiveAgent({ token: v })}
                 secure
                 autoCapitalize="none"
               />
@@ -536,12 +686,14 @@ function statusTone(
 }
 
 function describeTarget(settings: DeviceSettings): string {
+  const agent = activeAgent(settings);
   const harness =
     HARNESSES.find((h) => h.id === settings.harness)?.label ?? "no harness";
-  const host = settings.gatewayUrl
+  const name = agent.name.trim() || "Agent";
+  const host = agent.gatewayUrl
     .replace(/^[a-z]+:\/\//i, "")
     .replace(/\/+$/, "");
-  return host ? `${harness} · ${host}` : harness;
+  return host ? `${name} · ${harness} · ${host}` : `${name} · ${harness}`;
 }
 
 const styles = StyleSheet.create({
@@ -587,6 +739,40 @@ const styles = StyleSheet.create({
   },
   settingsContent: {
     paddingBottom: space.xl,
+  },
+  agentList: {
+    gap: space.sm,
+    marginBottom: space.md,
+  },
+  agentRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.sm,
+    backgroundColor: color.surfaceRaised,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: color.border,
+    paddingHorizontal: space.md,
+    paddingVertical: space.md,
+  },
+  agentRowActive: {
+    borderColor: color.accent,
+    backgroundColor: color.accentTint,
+  },
+  agentRowName: {
+    flex: 1,
+    color: color.textMuted,
+    fontSize: font.label,
+    fontWeight: "700",
+  },
+  agentRowNameActive: {
+    color: color.text,
+  },
+  agentDelete: {
+    padding: space.xs,
+  },
+  agentAdd: {
+    marginBottom: space.md,
   },
   note: {
     color: color.textDim,
