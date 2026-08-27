@@ -1,0 +1,48 @@
+{
+  "expo": {
+    "name": "agent_tts",
+    "slug": "agent-tts",
+    "version": "0.0.1",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0e1014",
+    "icon": "./assets/icon.png",
+    "scheme": "agenttts",
+    "platforms": [
+      "ios",
+      "android"
+    ],
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "dev.agenttts.app",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSMicrophoneUsageDescription": "agent_tts streams your voice to your self-hosted gateway.",
+        "UIBackgroundModes": [
+          "audio"
+        ]
+      }
+    },
+    "android": {
+      "package": "dev.agenttts.app",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#0e1014"
+      }
+    },
+    "plugins": [
+      "expo-dev-client",
+      [
+        "voice-audio",
+        {
+          "microphonePermission": "agent_tts streams your voice to your self-hosted gateway."
+        }
+      ],
+      "expo-asset"
+    ],
+    "androidStatusBar": {
+      "backgroundColor": "#0e1014",
+      "barStyle": "light-content"
+    }
+  }
+}

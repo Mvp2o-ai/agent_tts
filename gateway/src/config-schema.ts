@@ -1,24 +1,45 @@
-import type { HarnessId } from "./box-protocol.js";
+export type { HarnessId } from "./box-protocol.js";
 
-/**
- * Per-user configuration, stored in MongoDB and edited live from the mobile
- * app. Nothing here is baked into the image or env — the app is the UI for
- * all of it.
- */
 export interface UserConfig {
   userId: string;
   repo: {
     url: string;
-    /** e.g. GitHub PAT; injected into the container at session start. */
     credential: string;
     defaultBranch?: string;
   };
-  harness: HarnessId;
-  /** BYO model/provider keys passed through to the harness. */
+  harness: "claude-code" | "cursor-cli" | "gemini-cli" | "codex";
   modelKeys: Record<string, string>;
   voice: {
-    /** Hard-stop keyword; aborting mid-turn like the web stop button. */
     stopWord: string;
     ttsVoiceId?: string;
+  };
+}
+
+export const HARNESS_ORDER = [
+  "claude-code",
+  "cursor-cli",
+  "gemini-cli",
+  "codex",
+] as const;
+
+export function defaultConfig(userId: string): UserConfig {
+  return {
+    userId,
+    repo: { url: "", credential: "" },
+    harness: "claude-code",
+    modelKeys: {},
+    voice: { stopWord: "hard stop" },
+  };
+}
+
+export function mergeConfig(base: UserConfig, patch: Partial<UserConfig>): UserConfig {
+  return {
+    ...base,
+    ...patch,
+    userId: base.userId,
+    repo: { ...base.repo, ...(patch.repo ?? {}) },
+    modelKeys: { ...base.modelKeys, ...(patch.modelKeys ?? {}) },
+    voice: { ...base.voice, ...(patch.voice ?? {}) },
+    harness: patch.harness ?? base.harness,
   };
 }

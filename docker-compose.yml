@@ -1,0 +1,20 @@
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "4100:4100"
+    env_file:
+      - .env
+    environment:
+      CONFIG_DB: /data/agent_tts.db
+      AGENTBOX_IMAGE: agent_tts-agentbox:local
+      DOCKER_BIN: docker
+    volumes:
+      - agent_tts_data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  agent_tts_data:

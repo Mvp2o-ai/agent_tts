@@ -1,0 +1,107 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import {
+  classifyIncomingFrame,
+  connectionError,
+  httpToWs,
+  nextReconnectDelay,
+  validateReadyAudioFormat,
+  voiceUrl,
+  wsCloseMessage,
+} from "./protocol";
+
+describe("protocol", () => {
+  it("maps http(s) gateway URLs onto ws(s) voice URLs", () => {
+    assert.equal(httpToWs("https://gw.example:443/"), "wss://gw.example:443");
+    const url = voiceUrl(
+      {
+        gatewayUrl: "http://10.0.0.12:8787/",
+        token: "secret",
+        userId: "ken",
+      },
+      "ptt",
+    );
+    assert.match(url, /^ws:\/\/10\.0\.0\.12:8787\/v1\/voice\?/);
+    assert.match(url, /mode=ptt/);
+    assert.match(url, /userId=ken/);
+  });
+
+  it("rejects incomplete connection fields", () => {
+    assert.ok(connectionError({ gatewayUrl: "http://", token: "t", userId: "u" }));
+    assert.ok(
+      connectionError({ gatewayUrl: "http://10.0.0.1:8787", token: "", userId: "u" }),
+    );
+    assert.equal(
+      connectionError({
+        gatewayUrl: "http://10.0.0.1:8787",
+        token: "t",
+        userId: "u",
+      }),
+      null,
+    );
+  });
+
+  it("rejects missing or incompatible ready.audioFormat", () => {
+    assert.match(validateReadyAudioFormat(undefined) ?? "", /missing audioFormat/);
+    assert.match(
+      validateReadyAudioFormat({ encoding: "mp3", sampleRate: 24000, channels: 1 }) ??
+        "",
+      /mp3/,
+    );
+    assert.match(
+      validateReadyAudioFormat({
+        encoding: "pcm_s16le",
+        sampleRate: 16000,
+        channels: 1,
+      }) ?? "",
+      /16000/,
+    );
+    assert.equal(
+      validateReadyAudioFormat({
+        encoding: "pcm_s16le",
+        sampleRate: 24000,
+        channels: 1,
+      }),
+      null,
+    );
+  });
+
+  it("classifies JSON strings and binary PCM vs JSON-looking buffers", () => {
+    const json = classifyIncomingFrame('{"type":"ready"}');
+    assert.equal(json.kind, "json");
+    if (json.kind === "json") assert.match(json.text, /ready/);
+
+    const mp3 = classifyIncomingFrame(Uint8Array.from([0xff, 0xfb, 0x90, 0x00]));
+    assert.equal(mp3.kind, "audio");
+
+    const asBinaryJson = classifyIncomingFrame(
+      new TextEncoder().encode('{"type":"barge_in"}').buffer,
+    );
+    assert.equal(asBinaryJson.kind, "json");
+  });
+
+  it("does not reconnect after a user close or fatal gateway close", () => {
+    assert.equal(
+      nextReconnectDelay({ userClosed: true, attempt: 0, closeCode: 1006 }),
+      null,
+    );
+    assert.equal(
+      nextReconnectDelay({ userClosed: false, attempt: 0, closeCode: 4401 }),
+      null,
+    );
+    assert.equal(
+      nextReconnectDelay({ userClosed: false, attempt: 0, closeCode: 1006 }),
+      1000,
+    );
+    assert.equal(
+      nextReconnectDelay({ userClosed: false, attempt: 3, closeCode: 1006 }),
+      null,
+    );
+  });
+
+  it("maps gateway close codes to operator-facing text without leaking tokens", () => {
+    assert.match(wsCloseMessage(4401, ""), /unauthorized/);
+    assert.match(wsCloseMessage(4400, ""), /repo/);
+    assert.equal(wsCloseMessage(1000, "bye"), "bye");
+  });
+});

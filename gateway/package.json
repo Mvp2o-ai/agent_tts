@@ -8,11 +8,10 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test --import tsx src/**/*.test.ts",
-    "lint": "eslint src"
+    "test": "node --import tsx --test $(find src -name '*.test.ts')",
+    "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "mongodb": "^6.8.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {

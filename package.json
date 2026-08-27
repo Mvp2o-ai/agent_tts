@@ -10,6 +10,8 @@
     "lint": "npm run lint --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
-    "build": "npm run build --workspaces --if-present"
+    "build": "npm run build --workspaces --if-present",
+    "image:agentbox": "docker build -t agent_tts-agentbox:local ./agentbox",
+    "dev:gateway": "npm run dev --workspace=@agent_tts/gateway"
   }
 }

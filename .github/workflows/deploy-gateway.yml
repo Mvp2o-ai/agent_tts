@@ -1,8 +1,8 @@
 name: deploy gateway
 
-# Placeholder until M4, when the v1 host is decided (see PLAN.md open
-# questions). Builds the gateway so the deploy artifact is proven on main;
-# the deploy step lands with the host decision.
+# This project does not host the gateway. Operators deploy it on their own
+# machine (anything that can spawn Docker containers). The workflow only
+# builds so the artifact stays green on main.
 
 on:
   push:
@@ -22,4 +22,4 @@ jobs:
       - run: npm install
       - run: npm run build --workspace=@agent_tts/gateway
       - name: Deploy
-        run: echo "deploy target TBD (M4) — see PLAN.md"
+        run: echo "no first-party deploy — operators ship this binary to their own host"

@@ -7,17 +7,17 @@ A mobile voice remote for a coding agent running in a container. The user speaks
 ## Architecture
 
 ```
-mobile (Expo RN)
-   │  WebSocket: audio up / audio + events down
+mobile (Expo RN, native audio — the ONLY client; there is no web UI)
+   │  WebSocket: PCM 16 kHz up / MP3 + events down
    ▼
-gateway (Node/TS)
+gateway (Node/TS, headless API)
    │  STT (Deepgram streaming) ── transcripts, stop-word, barge-in
    │  TTS (ElevenLabs streaming) ── agent replies
-   │  prompt queue + session state (MongoDB)
+   │  prompt queue + per-user config (SQLite file, BYO volume)
    ▼
 agentbox (Docker, one per session)
    │  adapter speaks one JSON-lines protocol over stdin/stdout
-   └─ harness: claude-code | gemini-cli | codex | cursor-cli, cwd = user's repo clone
+   └─ harness: claude-code | cursor-cli | gemini-cli | codex, cwd = user's repo clone
 ```
 
 ## Core behaviors (the spec)
@@ -27,16 +27,16 @@ agentbox (Docker, one per session)
 3. **Prompt queue.** Utterances that arrive while the harness is mid-turn are queued and dispatched on the next iteration — same semantics as the platform's incoming-prompt queue.
 4. **Stop word = hard stop.** A configurable keyword (default: "hard stop") detected in STT aborts the current harness turn exactly like pressing the web UI stop button. Detection is transcript-based (Deepgram interim results), not a separate wake-word model.
 5. **Harness-agnostic box.** The container image includes all four harnesses (claude-code, gemini-cli, codex, cursor-cli); the adapter selects one per session. Adding a harness = adding an adapter, no mobile/gateway changes.
-6. **Config lives in a database.** Per-user config (repo URL, git credentials/PAT, harness choice, model keys, stop word, voice) is stored in MongoDB and editable from the mobile app in real time. No baked-in config.
+6. **Config lives in SQLite.** Per-user config (repo URL, git credentials/PAT, harness choice, model keys, stop word, voice) is stored in a SQLite file (Node's built-in driver, no server) and editable from the mobile app in real time. Bring your own persistence volume. No baked-in config.
 7. **Repo access.** Gateway injects git credentials into the container at session start; adapter clones/pulls the configured repo. Harness's own git abilities take it from there.
 
 ## Stack decisions
 
-- **Mobile:** Expo (React Native) — one codebase, dev-client friendly, TestFlight + APK sideload.
-- **Voice:** Deepgram streaming STT, ElevenLabs streaming TTS (same vendors as the current platform; known-good for barge-in latency).
-- **Gateway:** Node 22 + TypeScript, `ws` WebSockets, MongoDB for config/sessions.
+- **Mobile:** Expo (React Native) with native audio modules (dev client / EAS, not Expo Go) — one codebase, TestFlight + APK sideload. Mobile is the only client.
+- **Voice:** Deepgram streaming STT, ElevenLabs streaming TTS (known-good for barge-in latency). BYO keys.
+- **Gateway:** Node + TypeScript, `ws` WebSockets, SQLite (`node:sqlite`) for config. Headless — no web UI.
 - **Agentbox:** Debian-slim Docker image with node + the four harness CLIs; JSON-lines adapter protocol (`prompt`, `chunk`, `tool_event`, `done`, `abort`).
-- **Container runtime (v1):** gateway spawns containers via Docker socket on the same host (Hetzner-style VPS). Orchestration abstraction kept thin so a k8s/Fly backend can replace it later.
+- **Container runtime (v1):** the operator brings the host. The gateway spawns one container per session via the Docker API/socket on that host (`DOCKER_HOST` honored). This repo does not ship a hosted service or a vendor-specific VPS story. Orchestration stays thin so a k8s/Fly backend can replace Docker later.
 
 ## Milestones
 
@@ -52,12 +52,12 @@ agentbox (Docker, one per session)
 
 - `ci.yml` — on PR/push: install, lint, typecheck, test across workspaces.
 - `agentbox.yml` — on `agentbox/**` change to main: build + push image to GHCR.
-- `deploy-gateway.yml` — on main: build gateway, deploy to host (target TBD at M4; placeholder until then).
+- `deploy-gateway.yml` — on main: build the gateway so the artifact is proven. Deploy is the operator's job (this is not a hosted product).
 - Mobile builds via EAS at M6 (not in CI initially).
 
 ## Open questions to align on
 
-1. Where does the gateway live in v1 — new Hetzner VPS, or share existing infra?
-3. Container-per-session vs. long-lived per-user container (affects cold-start vs. cost).
-4. Who pays for model keys in open-source mode — BYO keys only? (Assumed yes: BYO everything.)
-5. Stop word default and whether it must work while TTS is playing loudly (echo cancellation requirements).
+1. ~~Where does the gateway live?~~ **BYO host.** Operators run gateway + a container runtime. No first-party hosting.
+3. Container-per-session vs. long-lived per-user container (affects cold-start vs. cost). v1 is container-per-session.
+4. ~~Who pays for model keys?~~ **BYO everything** (keys, git PAT, host, Docker image).
+5. Stop word default and whether it must work while TTS is playing loudly (echo cancellation requirements). Browser capture uses `echoCancellation: true`; still verify on speakerphone hardware.
