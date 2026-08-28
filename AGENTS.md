@@ -19,7 +19,8 @@ Preserve these decisions:
 
 - There is no web or desktop client.
 - Operators bring their own host, container runtime, persistence volume, vendor
-  keys, and git credentials. The harness clones remotes; the adapter does not.
+  keys, and GitHub App identity. The adapter provisions repositories selected
+  for the container before starting the harness; the harness may clone more.
 - SQLite is the only configuration persistence dependency.
 - One deployed container = one agent. Gateway and harness live in the same
   image; the adapter runs as a non-root child process. No Docker socket, no
@@ -40,8 +41,9 @@ Preserve these decisions:
 - Wired, USB, Bluetooth, and car audio routes take precedence over the device
   speaker. The native layer owns route changes, echo cancellation, background
   capture, and streamed playback.
-- Git credentials must remain in host-scoped environment headers (`git`) and
-  `GH_TOKEN` (`gh`). Never write a PAT into `.git/config` or a clone URL.
+- GitHub user access tokens must remain in host-scoped environment headers
+  (`git`) and `GH_TOKEN` (`gh`). Never write a token into `.git/config` or a
+  clone URL.
   The box ships `git` and `gh` so the agent can clone multiple remotes and
   run a normal checkout → review → open-PR flow.
 
@@ -100,23 +102,26 @@ Required gateway values:
 - `DEEPGRAM_API_KEY`
 - `ELEVENLABS_API_KEY`
 
-Harness model keys and repository credentials are normally entered in the
-mobile Settings screen, saved in the phone's native secure credential library,
-and selected for each agent. Raw PATs/model keys must not be written to
-AsyncStorage. The selected values are also persisted by that agent's gateway:
+Harness model keys and GitHub credentials are selected in the mobile Settings
+screen and saved in the phone's native secure credential library. Raw GitHub
+tokens/model keys must not be written to AsyncStorage. Model keys are also
+persisted by that agent's gateway:
 
 - `ANTHROPIC_API_KEY`
 - `CURSOR_API_KEY`
 - `GEMINI_API_KEY`
 - `OPENAI_API_KEY`
-- HTTPS git PAT, optional for public clones. Prefer a fine-grained GitHub
-  token covering the repos you will name by voice, with Contents and Pull
-  requests (read/write), short expiry, and no admin or workflow scopes.
-  GitHub has no “PRs only” token that can also push a branch; Contents write
-  is required for `git push`. Classic `repo` tokens are broader than this
-  product needs. The box has `git` and `gh`. Auth is a host-scoped
-  `http.extraheader` plus `GH_TOKEN`; the adapter never clones. SSH remotes
-  are not authenticated.
+- GitHub App user access and refresh tokens obtained through Device Flow stay
+  in native secure storage. The mobile app refreshes expiring tokens and sends
+  the current access token over the authenticated voice socket for that
+  container session; the gateway must never persist it in SQLite. The app
+  needs Metadata (read), Contents (read/write), and Pull requests (read/write).
+  Users choose which repositories the app installation can access. The mobile
+  app then selects any subset for each agent container. Auth is a host-scoped
+  `http.extraheader` plus `GH_TOKEN`; selected repositories are cloned as
+  stable `owner--name` siblings under `/workspace` before the harness starts.
+  SSH remotes are not authenticated. A manually supplied token remains a
+  migration fallback only.
 
 Never commit `.env`, SQLite files, API keys, PATs, signing credentials, or
 generated native build output. Do not search unrelated projects for secrets.
@@ -164,9 +169,10 @@ ngrok start --all
 Put the resulting `https://…ngrok…` URL directly into the active agent's
 **Gateway URL** field in the app. Unreserved ngrok URLs can change when ngrok
 restarts. For regular private use, a stable Tailscale hostname is preferable;
-for an always-on deployment, use a VPS with TLS. Expose only gateway port
-`4100`, require a strong `GATEWAY_TOKEN`, and never expose the Docker socket
-or Docker API.
+for an always-on deployment, use a VPS with TLS or a managed host from
+[`docs/deployment/`](./docs/deployment/README.md). Expose only the gateway
+HTTP/WebSocket port, require a strong `GATEWAY_TOKEN`, and never expose the
+Docker socket or Docker API.
 
 ## Verification gates
 
@@ -187,12 +193,16 @@ npm test
 For image or harness changes:
 
 1. Rebuild `agent_tts:local` from `gateway/Dockerfile`.
-2. Verify the container runs as a non-root user.
+2. Verify the container runs as a non-root user. The entrypoint may start as
+   root to chown a host-mounted `/data` volume, then it must `exec` as
+   `agent`. Do not leave the gateway running as UID 0 (`RAILWAY_RUN_UID=0`
+   or equivalent).
 3. Verify the adapter spawns as a child process of the gateway.
 4. Inspect the installed CLI's current `--help`; do not rely on remembered
    flags.
-5. Have the harness clone a remote, inspect it, write a file, stream output,
-   continue, and abort.
+5. Provision selected remotes before `ready`, then have the harness inspect
+   them, clone an additional remote, write a file, stream output, continue,
+   and abort.
 6. Confirm a new session is a fresh container from the image (not an in-place
    `docker restart`) and that only the SQLite volume survives.
 
@@ -221,6 +231,9 @@ For voice-path changes:
 - Keep configuration editable in the mobile app and durable through the
   operator-mounted SQLite volume.
 - Do not add hosted-provider assumptions to the open-source runtime.
+  Provider differences belong in `docs/deployment/<provider>.md`. Those
+  files are generic operator guides (Railway is the only one so far).
+  Do not add deprecated `railway.json` / `railway.toml`.
 
 ## Distribution and licensing
 

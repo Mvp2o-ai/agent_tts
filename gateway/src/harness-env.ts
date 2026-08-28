@@ -23,8 +23,8 @@ export function harnessEnv(
 ): Record<string, string> {
   const env: Record<string, string> = {
     AGENT_TTS_HARNESS: config.harness,
-    AGENT_TTS_GIT_CREDENTIAL: config.repo.credential,
     AGENT_TTS_GIT_HOST: gitHostFromRepoUrl(config.repo.url),
+    AGENT_TTS_REPOSITORIES: JSON.stringify(config.repo.repositories ?? []),
     AGENT_TTS_WORKSPACE: workspace,
   };
   for (const [k, v] of Object.entries(config.modelKeys)) {

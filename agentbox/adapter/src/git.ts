@@ -1,8 +1,7 @@
 /**
- * Host-scoped git/gh auth for the harness. The adapter never clones.
- * The agent clones whatever remotes the operator names.
+ * Host-scoped git/gh auth for provisioning and the harness.
  *
- * Extraheader is env-only so a yolo agent cannot read the PAT from
+ * Extraheader is env-only so a yolo agent cannot read the token from
  * `.git/config`. `GH_TOKEN` is set because `gh` (PR checkout/create/review)
  * cannot use git extraheader.
  */
@@ -28,7 +27,7 @@ export function gitAuthHost(remoteOrHost?: string): string {
  * arbitrary URLs.
  *
  * Remaining push limitation: HTTPS push to that host works only if the
- * PAT has write scope. SSH remotes have no extraheader of their own
+ * token has write permission. SSH remotes have no extraheader of their own
  * (no ssh-agent in the box); agents should clone HTTPS on this host.
  */
 export function gitAuthEnv(

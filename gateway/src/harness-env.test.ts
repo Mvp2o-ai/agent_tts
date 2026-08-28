@@ -9,12 +9,26 @@ describe("harnessEnv", () => {
     cfg.harness = "cursor-cli";
     cfg.repo.url = "https://github.com/acme/repo.git";
     cfg.repo.credential = "pat";
+    cfg.repo.repositories = [
+      {
+        id: 1,
+        fullName: "acme/repo",
+        cloneUrl: "https://github.com/acme/repo.git",
+      },
+    ];
     cfg.modelKeys = { CURSOR_API_KEY: "ck" };
     const env = harnessEnv(cfg);
     assert.equal(env.AGENT_TTS_HARNESS, "cursor-cli");
-    assert.equal(env.AGENT_TTS_GIT_CREDENTIAL, "pat");
+    assert.equal(env.AGENT_TTS_GIT_CREDENTIAL, undefined);
     assert.equal(env.AGENT_TTS_GIT_HOST, "github.com");
     assert.equal(env.AGENT_TTS_REPO_URL, undefined);
+    assert.deepEqual(JSON.parse(env.AGENT_TTS_REPOSITORIES ?? "[]"), [
+      {
+        id: 1,
+        fullName: "acme/repo",
+        cloneUrl: "https://github.com/acme/repo.git",
+      },
+    ]);
     assert.equal(env.CURSOR_API_KEY, "ck");
   });
 

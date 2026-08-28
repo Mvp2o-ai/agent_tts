@@ -1,6 +1,10 @@
 import type { VoiceMode } from "./protocol";
 
-export type SessionStatus = "disconnected" | "connecting" | "ready";
+export type SessionStatus =
+  | "disconnected"
+  | "connecting"
+  | "provisioning"
+  | "ready";
 
 export type SessionGeneration = {
   generation: number;

@@ -11,3 +11,5 @@ build/
 coverage/
 ios/
 android/
+.cursor/rules/*.local.mdc
+eas-project.local.json

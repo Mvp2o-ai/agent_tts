@@ -10,7 +10,7 @@ FROM node:24-bookworm-slim
 ARG GH_VERSION=2.98.0
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git ca-certificates curl ripgrep python3 \
+    git ca-certificates curl ripgrep python3 gosu \
     && rm -rf /var/lib/apt/lists/* \
     && arch="$(dpkg --print-architecture)" \
     && case "$arch" in amd64) gharch=amd64 ;; arm64) gharch=arm64 ;; *) echo "unsupported arch: $arch" >&2; exit 1 ;; esac \
@@ -57,6 +57,9 @@ RUN useradd -m agent \
     && mkdir /workspace /data \
     && chown agent:agent /workspace /data
 
+COPY gateway/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh
+
 USER agent
 RUN git config --global --add safe.directory /workspace \
     && git config --global --add safe.directory '*' \
@@ -79,4 +82,8 @@ ENV NODE_ENV=production \
 
 WORKDIR /app/gateway
 EXPOSE 4100
+# Remain root at container start so host-mounted volumes can be chowned,
+# then docker-entrypoint.sh execs the gateway as `agent`.
+USER root
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["node", "dist/index.js"]

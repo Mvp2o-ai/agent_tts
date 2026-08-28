@@ -15,6 +15,8 @@ export interface BoxConnection {
 
 export function attachProcess(child: ChildProcess): BoxConnection {
   const handlers = new Set<(msg: BoxOutbound) => void>();
+  let intentionalClose = false;
+  let processFailureReported = false;
   if (!child.stdout) throw new Error("box process has no stdout");
   if (!child.stdin) throw new Error("box process has no stdin");
 
@@ -32,6 +34,20 @@ export function attachProcess(child: ChildProcess): BoxConnection {
   child.stderr?.on("data", (buf: Buffer) => {
     process.stderr.write(`[agentbox] ${buf.toString()}`);
   });
+  child.once("error", (err) => {
+    processFailureReported = true;
+    for (const handler of handlers) {
+      handler({ type: "error", message: `agentbox failed: ${err.message}` });
+    }
+  });
+  child.once("exit", (code, signal) => {
+    if (intentionalClose || processFailureReported) return;
+    processFailureReported = true;
+    const detail = signal ? `signal ${signal}` : `code ${code ?? "unknown"}`;
+    for (const handler of handlers) {
+      handler({ type: "error", message: `agentbox exited with ${detail}` });
+    }
+  });
 
   return {
     send(msg) {
@@ -41,6 +57,7 @@ export function attachProcess(child: ChildProcess): BoxConnection {
       handlers.add(handler);
     },
     async close() {
+      intentionalClose = true;
       rl.close();
       if (child.exitCode === null) {
         child.kill("SIGTERM");
@@ -65,9 +82,6 @@ export function spawnCommandBox(argv: string[], env: NodeJS.ProcessEnv): BoxConn
   const child = spawn(bin, args, {
     env: { ...process.env, ...env },
     stdio: ["pipe", "pipe", "pipe"],
-  });
-  child.on("error", (err) => {
-    process.stderr.write(`agentbox spawn error: ${err.message}\n`);
   });
   return attachProcess(child);
 }

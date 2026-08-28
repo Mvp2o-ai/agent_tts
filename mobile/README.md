@@ -16,6 +16,8 @@ audio session.
 ```bash
 cd mobile
 npm install
+export EXPO_PUBLIC_GITHUB_CLIENT_ID=<github-app-client-id>
+export EXPO_PUBLIC_GITHUB_APP_SLUG=<github-app-slug>
 npx expo run:ios          # Simulator, generates ios/ locally (gitignored)
 # or
 npx expo run:android
@@ -32,29 +34,40 @@ Simulator is unreliable. Use a physical device for voice.
 
 ## Configuration and persistence
 
-Nothing is read from environment variables or committed secrets. Settings live
-in **device-local AsyncStorage** (`agent_tts.deviceSettings.v1`):
+The GitHub App must enable Device Flow, grant Metadata (read), Contents
+(read/write), and Pull requests (read/write). Keep user-to-server token
+expiration enabled; the app securely stores and rotates Device Flow refresh
+tokens.
+
+The public GitHub App client ID and slug are compiled from the two
+`EXPO_PUBLIC_GITHUB_*` values above; no client secret is used. Non-secret
+settings live in **device-local AsyncStorage** (`agent_tts.deviceSettings.v1`):
 
 - Gateway URL, gateway token, user id
-- Git PAT, optional git host
-- Harness, model API keys, stop word, ElevenLabs voice id
+- GitHub credential references and per-agent selected repository metadata
+- Harness, model-key references, stop word, ElevenLabs voice id
 
-They survive app restart on that phone. They are **not encrypted at rest**
-beyond whatever the OS does for app storage; this is acceptable for an engineer
-tool. Uninstalling the app clears them. iOS backups may include them.
+GitHub user access tokens and model API keys are stored separately in the
+native secure credential library. They survive app restart on that phone but
+are never written to AsyncStorage. Uninstalling the app clears them.
 
-**Save** still PUTs repo / harness / keys / voice to the gateway SQLite store.
-**Load config** pulls that gateway copy back into the form (and then onto the
-device). Connection fields (URL / token / user id) are device-only; the gateway
-never stores them for you.
+**Save** PUTs selected repository metadata / harness / keys / voice to the
+gateway SQLite store. GitHub tokens remain in native secure storage and are
+sent over the authenticated voice socket only when a session starts.
+**Load config** pulls the non-GitHub-secret gateway copy back into the form.
+Connection fields (URL / token / user id) are device-only; the gateway never
+stores them for you.
 
 `localhost` on a phone is the phone itself, not your laptop. Use a LAN IP
 (`http://192.168.x.x:4100`) or an `https://` URL in front of the gateway.
 
 ## Engineer distribution (EAS)
 
-Profiles in `eas.json` (run from `mobile/` after `npx eas-cli login` and
-`npx eas-cli init` once per Expo account):
+Physical-device install is an EAS internal development-client **build page URL**,
+opened in Safari on the phone — not USB `expo run:ios --device`. Profiles live
+in `eas.json` (run from `mobile/` after `npx eas-cli login` and `npx eas-cli init`
+once per Expo account). Keep `extra.eas.projectId` in gitignored
+`eas-project.local.json`; do not commit an Expo owner or project id.
 
 | Profile | Purpose |
 |---|---|
@@ -65,7 +78,8 @@ Profiles in `eas.json` (run from `mobile/` after `npx eas-cli login` and
 
 ```bash
 npx eas-cli build --profile development-simulator --platform ios
-npx eas-cli build --profile development --platform ios
+npm run eas:device:ios    # or: npx eas-cli build --profile development --platform ios
+bash scripts/print-dev-link.sh
 npx eas-cli build --profile apk --platform android
 npx eas-cli build --profile production --platform ios
 npx eas-cli submit --profile production --platform ios   # TestFlight only
@@ -85,8 +99,8 @@ Identifiers already in the repo are engineer placeholders, not store listings:
   after you sign in), or your own signing assets via `credentialsSource: local`
 - An App Store Connect app record + **ASC App ID** if you use TestFlight
   submit (`eas.json` `submit.production.ios` is empty until you set that)
-- An Expo account and EAS project (`npx eas-cli init` writes `extra.eas.projectId`
-  — do not commit secrets; the project id is not a credential)
+- An Expo account and EAS project (`npx eas-cli init` once; store
+  `projectId` / optional `owner` in `eas-project.local.json`, not in git)
 
 iOS Simulator builds do not need a team id. Physical iOS devices and TestFlight do.
 

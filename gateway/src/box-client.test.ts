@@ -16,6 +16,9 @@ describe("box protocol via fake adapter", () => {
       const t = setTimeout(() => reject(new Error("timeout")), 5000);
       box.onMessage((msg) => {
         events.push(msg.type);
+        if (msg.type === "ready") {
+          box.send({ type: "prompt", id: "p1", text: "hello" });
+        }
         if (msg.type === "done") {
           clearTimeout(t);
           resolve();
@@ -25,9 +28,29 @@ describe("box protocol via fake adapter", () => {
           reject(new Error(msg.message));
         }
       });
-      box.send({ type: "prompt", id: "p1", text: "hello" });
+      box.send({ type: "initialize" });
     });
     await box.close();
-    assert.deepEqual(events, ["chunk", "chunk", "done"]);
+    assert.deepEqual(events, [
+      "provisioning",
+      "ready",
+      "chunk",
+      "chunk",
+      "done",
+    ]);
+  });
+
+  it("reports an adapter exit instead of leaving provisioning pending", async () => {
+    const box = spawnCommandBox(
+      ["node", "-e", "process.exit(2)"],
+      {},
+    );
+    const message = await new Promise<string>((resolve) => {
+      box.onMessage((event) => {
+        if (event.type === "error") resolve(event.message);
+      });
+    });
+    assert.match(message, /agentbox exited with code 2/);
+    await box.close();
   });
 });

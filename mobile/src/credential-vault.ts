@@ -1,4 +1,4 @@
-export type CredentialKind = "git-pat" | "model-key";
+export type CredentialKind = "github-token" | "git-pat" | "model-key";
 
 export interface CredentialEntry {
   id: string;
@@ -76,6 +76,7 @@ function newCredentialId(): string {
 }
 
 function defaultLabel(kind: CredentialKind, keyEnv?: string): string {
+  if (kind === "github-token") return "GitHub account";
   return kind === "git-pat" ? "Git credential" : keyEnv || "Model key";
 }
 
@@ -85,7 +86,9 @@ function parseEntry(value: unknown): CredentialEntry | null {
   if (
     typeof entry.id !== "string" ||
     typeof entry.label !== "string" ||
-    (entry.kind !== "git-pat" && entry.kind !== "model-key")
+    (entry.kind !== "github-token" &&
+      entry.kind !== "git-pat" &&
+      entry.kind !== "model-key")
   ) {
     return null;
   }

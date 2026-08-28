@@ -60,7 +60,18 @@ type ServerEvent = {
   oldestEventId?: number;
   lastEventId?: number;
   sessionState?: "idle" | "working" | "speaking";
+  stage?: "preparing" | "cloning" | "starting_harness";
+  repository?: string;
+  index?: number;
+  total?: number;
 };
+
+export interface ProvisioningState {
+  stage: "preparing" | "cloning" | "starting_harness";
+  repository?: string;
+  index?: number;
+  total: number;
+}
 
 function isBlob(data: unknown): data is Blob {
   return typeof Blob !== "undefined" && data instanceof Blob;
@@ -73,7 +84,11 @@ function beginUniqueConnect(state: SessionGeneration): SessionGeneration {
 
 export function useVoiceSession(
   conn: Connection,
-  options: { profileId: string; focused: boolean },
+  options: {
+    profileId: string;
+    focused: boolean;
+    getGitCredential?: () => Promise<string>;
+  },
 ): {
   status: SessionStatus;
   events: SessionEvent[];
@@ -81,6 +96,7 @@ export function useVoiceSession(
   working: boolean;
   harness: string;
   generationId: string;
+  provisioning: ProvisioningState | null;
   connect: (mode: VoiceMode) => void;
   disconnect: () => void;
   pttStart: () => void;
@@ -93,6 +109,8 @@ export function useVoiceSession(
   const [working, setWorking] = useState(false);
   const [harness, setHarness] = useState("");
   const [generationId, setGenerationId] = useState("");
+  const [provisioning, setProvisioning] =
+    useState<ProvisioningState | null>(null);
   const [lastEventId, setLastEventId] = useState(0);
   const [transcriptHydrated, setTranscriptHydrated] = useState(false);
 
@@ -100,6 +118,8 @@ export function useVoiceSession(
   connRef.current = conn;
   const focusedRef = useRef(options.focused);
   focusedRef.current = options.focused;
+  const getGitCredentialRef = useRef(options.getGitCredential);
+  getGitCredentialRef.current = options.getGitCredential;
   const profileIdRef = useRef(options.profileId);
   profileIdRef.current = options.profileId;
 
@@ -271,6 +291,7 @@ export function useVoiceSession(
       void flushPlayback();
       void releaseOwnedVoice();
       pushEvent("error", message);
+      setProvisioning(null);
       setStatusSafe("disconnected");
     },
     [clearTimers, closeSocket, flushPlayback, pushEvent, setStatusSafe, stopMic],
@@ -312,6 +333,21 @@ export function useVoiceSession(
         setLastEventId(msg.eventId);
       }
       switch (msg.type) {
+        case "provisioning": {
+          if (!msg.stage) break;
+          if (connectTimerRef.current) {
+            clearTimeout(connectTimerRef.current);
+            connectTimerRef.current = null;
+          }
+          setProvisioning({
+            stage: msg.stage,
+            total: msg.total ?? 0,
+            ...(msg.repository ? { repository: msg.repository } : {}),
+            ...(msg.index !== undefined ? { index: msg.index } : {}),
+          });
+          setStatusSafe("provisioning");
+          break;
+        }
         case "ready": {
           playbackAllowedRef.current = false;
           const formatErr = validateReadyAudioFormat(msg.audioFormat);
@@ -338,6 +374,7 @@ export function useVoiceSession(
             msg.sessionState === "working" || msg.sessionState === "speaking",
           );
           reconnectAttemptRef.current = 0;
+          setProvisioning(null);
           if (connectTimerRef.current) {
             clearTimeout(connectTimerRef.current);
             connectTimerRef.current = null;
@@ -436,7 +473,7 @@ export function useVoiceSession(
   );
 
   const openSocket = useCallback(
-    (generation: number, mode: VoiceMode) => {
+    (generation: number, mode: VoiceMode, gitCredential: string) => {
       const current = connRef.current;
       const err = connectionError(current);
       if (err) {
@@ -460,6 +497,16 @@ export function useVoiceSession(
       }
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
+      ws.onopen = () => {
+        if (wsRef.current !== ws) return;
+        if (!shouldAcceptNativeEvent(sessionGenRef.current, generation)) return;
+        ws.send(
+          JSON.stringify({
+            type: "git_auth",
+            credential: gitCredential,
+          }),
+        );
+      };
 
       connectTimerRef.current = setTimeout(() => {
         if (!shouldAcceptNativeEvent(sessionGenRef.current, generation)) return;
@@ -538,11 +585,16 @@ export function useVoiceSession(
               audioOwnerProfileId = profileIdRef.current;
               return prepareVoiceNative(nextGen, modeRef.current);
             })
-            .then(() => {
+            .then(async () => {
               if (!shouldAcceptNativeEvent(sessionGenRef.current, nextGen)) {
                 return;
               }
-              openSocket(nextGen, modeRef.current);
+              const credential =
+                (await getGitCredentialRef.current?.()) ?? "";
+              if (!shouldAcceptNativeEvent(sessionGenRef.current, nextGen)) {
+                return;
+              }
+              openSocket(nextGen, modeRef.current, credential);
             })
             .catch((cause) => {
               failClosed(
@@ -574,6 +626,7 @@ export function useVoiceSession(
     closeSocket();
     void flushPlayback();
     void releaseOwnedVoice();
+    setProvisioning(null);
     setStatusSafe("disconnected");
   }, [clearTimers, closeSocket, flushPlayback, setStatusSafe, stopMic]);
 
@@ -589,11 +642,25 @@ export function useVoiceSession(
       stopMic();
       closeSocket();
       void flushPlayback();
+      setProvisioning(null);
       setStatusSafe("connecting");
 
       const run = async () => {
+        let credential: string;
+        try {
+          credential = (await getGitCredentialRef.current?.()) ?? "";
+        } catch (err) {
+          if (!shouldAcceptNativeEvent(sessionGenRef.current, generation)) return;
+          failClosed(
+            err instanceof Error
+              ? err.message
+              : "GitHub credential is unavailable",
+          );
+          return;
+        }
+        if (!shouldAcceptNativeEvent(sessionGenRef.current, generation)) return;
         if (!focusedRef.current) {
-          openSocket(generation, mode);
+          openSocket(generation, mode, credential);
           return;
         }
         audioOwnerProfileId = profileIdRef.current;
@@ -642,7 +709,7 @@ export function useVoiceSession(
         }
 
         if (!mountedRef.current) return;
-        openSocket(generation, mode);
+        openSocket(generation, mode, credential);
       };
 
       void run();
@@ -811,6 +878,7 @@ export function useVoiceSession(
     working,
     harness,
     generationId,
+    provisioning,
     connect,
     disconnect,
     pttStart,
