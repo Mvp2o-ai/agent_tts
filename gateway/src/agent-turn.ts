@@ -1,11 +1,18 @@
 import type { BoxConnection } from "./box-client.js";
-import { isTerminal, type BoxOutbound } from "./box-protocol.js";
+import { isTerminal, type BoxInbound, type BoxOutbound } from "./box-protocol.js";
 import type { UserConfig } from "./config-schema.js";
 import { PromptQueue } from "./prompt-queue.js";
 import { SpeechBuffer } from "./speech-buffer.js";
 import { openElevenLabs, type TtsStream } from "./elevenlabs.js";
 
 export type ClientEvent =
+  | {
+      type: "provisioning";
+      stage: "preparing" | "cloning" | "starting_harness";
+      repository?: string;
+      index?: number;
+      total: number;
+    }
   | { type: "queued"; promptId: string; position: number }
   | { type: "prompt_start"; promptId: string; text: string }
   | { type: "transcript"; text: string; isFinal: boolean }
@@ -31,9 +38,25 @@ export type OpenTts = (opts: {
   onEnd?: () => void;
 }) => TtsStream;
 
+function promptInbound(
+  id: string,
+  text: string,
+  config: UserConfig,
+): Extract<BoxInbound, { type: "prompt" }> {
+  const msg: Extract<BoxInbound, { type: "prompt" }> = { type: "prompt", id, text };
+  if (config.model) msg.model = config.model;
+  if (config.effort) msg.effort = config.effort;
+  return msg;
+}
+
 export interface AgentTurnOptions {
   openTts?: OpenTts;
   onIdle?: () => void;
+  /**
+   * Re-read on every prompt dispatch so model/effort changes apply on the
+   * next turn without a session reset. Harness stays snapshotted.
+   */
+  getConfig?: () => Promise<UserConfig>;
 }
 
 /**
@@ -52,6 +75,7 @@ export interface AgentTurnOptions {
  */
 export class AgentTurn {
   readonly queue = new PromptQueue();
+  readonly ready: Promise<void>;
   speaking = false;
   private speechEnabled = true;
   private tts: TtsStream | null = null;
@@ -62,12 +86,27 @@ export class AgentTurn {
   private muted = false;
   private ttsSuppressed = false;
   private closed = false;
+  private initializationStarted = false;
+  private initialized = false;
+  private readySettled = false;
+  private resolveReady!: () => void;
+  private rejectReady!: (error: Error) => void;
   private readonly openTts: OpenTts;
   private readonly onIdle?: () => void;
+  private readonly getConfig?: () => Promise<UserConfig>;
+  private promptDispatched = false;
 
   get activity(): "idle" | "working" | "speaking" {
     if (this.speaking) return "speaking";
     return this.phase === "idle" ? "idle" : "working";
+  }
+
+  get isReady(): boolean {
+    return this.initialized;
+  }
+
+  get isInitializationStarted(): boolean {
+    return this.initializationStarted;
   }
 
   constructor(
@@ -79,7 +118,21 @@ export class AgentTurn {
   ) {
     this.openTts = options.openTts ?? openElevenLabs;
     this.onIdle = options.onIdle;
+    this.getConfig = options.getConfig;
+    this.ready = new Promise<void>((resolve, reject) => {
+      this.resolveReady = resolve;
+      this.rejectReady = reject;
+    });
     box.onMessage((msg) => this.onBox(msg));
+  }
+
+  initialize(credential?: string): void {
+    if (this.closed || this.initializationStarted) return;
+    this.initializationStarted = true;
+    this.box.send({
+      type: "initialize",
+      ...(credential ? { credential } : {}),
+    });
   }
 
   enqueue(text: string): void {
@@ -111,8 +164,15 @@ export class AgentTurn {
 
     if (canStopTurn) {
       this.phase = "stopping";
-      this.box.send({ type: "abort", reason });
+      if (this.promptDispatched) {
+        this.box.send({ type: "abort", reason });
+        this.sink.sendJson({ type: "stopped", reason });
+        return;
+      }
       this.sink.sendJson({ type: "stopped", reason });
+      this.currentPromptId = undefined;
+      this.muted = false;
+      this.becomeIdleAndPump();
       return;
     }
 
@@ -149,7 +209,12 @@ export class AgentTurn {
   }
 
   async close(): Promise<void> {
+    if (this.closed) return;
     this.closed = true;
+    if (!this.readySettled) {
+      this.readySettled = true;
+      this.rejectReady(new Error("agent session closed before it became ready"));
+    }
     this.phase = "idle";
     this.currentPromptId = undefined;
     this.stopTts();
@@ -158,11 +223,12 @@ export class AgentTurn {
   }
 
   private pump(): void {
-    if (this.closed) return;
+    if (this.closed || !this.initialized) return;
     const next = this.queue.takeIfIdle();
     if (!next) return;
     this.phase = "running";
     this.currentPromptId = next.id;
+    this.promptDispatched = false;
     this.speech = new SpeechBuffer();
     this.muted = false;
     this.ttsSuppressed = false;
@@ -171,11 +237,54 @@ export class AgentTurn {
       promptId: next.id,
       text: next.text,
     });
-    this.box.send({ type: "prompt", id: next.id, text: next.text });
+    if (this.getConfig) {
+      void this.dispatchPrompt(next);
+      return;
+    }
+    this.sendPrompt(next, this.config);
+  }
+
+  private async dispatchPrompt(next: { id: string; text: string }): Promise<void> {
+    let latest = this.config;
+    try {
+      latest = await this.getConfig!();
+    } catch {
+      latest = this.config;
+    }
+    if (this.closed || this.currentPromptId !== next.id) return;
+    if (this.phase !== "running") return;
+    this.sendPrompt(next, latest);
+  }
+
+  private sendPrompt(next: { id: string; text: string }, config: UserConfig): void {
+    this.promptDispatched = true;
+    this.box.send(promptInbound(next.id, next.text, config));
   }
 
   private onBox(msg: BoxOutbound): void {
     if (this.closed) return;
+    if (msg.type === "provisioning") {
+      this.sink.sendJson(msg);
+      return;
+    }
+    if (msg.type === "ready") {
+      if (!this.initialized) {
+        this.initialized = true;
+        this.readySettled = true;
+        this.resolveReady();
+        this.pump();
+      }
+      return;
+    }
+    if (msg.type === "error" && !msg.promptId) {
+      const error = new Error(msg.message);
+      this.sink.sendJson({ type: "error", message: error.message });
+      if (!this.readySettled) {
+        this.readySettled = true;
+        this.rejectReady(error);
+      }
+      return;
+    }
     if (this.phase === "idle" || this.phase === "draining") return;
 
     const promptId = "promptId" in msg ? msg.promptId : undefined;

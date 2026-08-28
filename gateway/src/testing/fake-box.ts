@@ -1,6 +1,8 @@
 /**
  * Fake agentbox for gateway tests. Speaks the JSON-lines protocol on stdio.
  * Echoes the prompt as two chunks then done. Abort -> aborted.
+ * Prompt JSON-lines may include optional `model` and `effort`; they are
+ * accepted and do not change the echo.
  */
 import { createInterface } from "node:readline";
 
@@ -13,8 +15,17 @@ rl.on("line", (line) => {
     type: string;
     id?: string;
     text?: string;
+    model?: string;
+    effort?: string;
     reason?: string;
   };
+  if (msg.type === "initialize") {
+    process.stdout.write(
+      `${JSON.stringify({ type: "provisioning", stage: "preparing", total: 0 })}\n`,
+    );
+    process.stdout.write(`${JSON.stringify({ type: "ready", repositories: 0 })}\n`);
+    return;
+  }
   if (msg.type === "abort") {
     if (current) {
       process.stdout.write(

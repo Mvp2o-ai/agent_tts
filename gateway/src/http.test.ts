@@ -8,12 +8,15 @@ import { VOICE_AUDIO_FORMAT } from "./elevenlabs.js";
 import type { AddressInfo } from "node:net";
 
 const fakeBox = fileURLToPath(new URL("./testing/fake-box.ts", import.meta.url));
+const failingProvisionBox = fileURLToPath(
+  new URL("./testing/failing-provision-box.ts", import.meta.url),
+);
 
 describe("gateway http", () => {
   it("serves health and round-trips a debug prompt through the fake box", async () => {
     const store = new MemoryConfigStore();
     await store.save("default", {
-      repo: { url: "", credential: "" },
+      repo: { url: "", credential: "", repositories: [] },
       harness: "claude-code",
     });
     const { server } = createGateway({
@@ -54,13 +57,15 @@ describe("gateway http", () => {
       assert.match(ndjson, /agent_text/);
       assert.match(ndjson, /"type":"done"/);
 
+      const frames: Record<string, unknown>[] = [];
       const ready = await new Promise<Record<string, unknown>>((resolve, reject) => {
-        const ws = new WebSocket(
+        const ws = openAuthenticatedSocket(
           `ws://127.0.0.1:${port}/v1/voice?token=test-token&userId=default&mode=ptt`,
         );
         const timer = setTimeout(() => reject(new Error("ready timeout")), 5000);
         ws.on("message", (data) => {
           const msg = JSON.parse(String(data)) as Record<string, unknown>;
+          frames.push(msg);
           if (msg.type === "ready") {
             clearTimeout(timer);
             ws.close();
@@ -70,9 +75,13 @@ describe("gateway http", () => {
         ws.on("error", reject);
       });
       assert.equal(ready.mode, "ptt");
+      assert.deepEqual(
+        frames.map((frame) => frame.type),
+        ["provisioning", "ready"],
+      );
       assert.equal(ready.harness, "claude-code");
       assert.equal(ready.generationId, "test-generation");
-      assert.equal(ready.lastEventId, 0);
+      assert.equal(ready.lastEventId, 1);
       assert.deepEqual(ready.audioFormat, VOICE_AUDIO_FORMAT);
 
       const killed = await fetch(
@@ -94,7 +103,7 @@ describe("gateway http", () => {
   it("keeps a turn alive across disconnect and replays missed text on reconnect", async () => {
     const store = new MemoryConfigStore();
     await store.save("default", {
-      repo: { url: "", credential: "" },
+      repo: { url: "", credential: "", repositories: [] },
       harness: "claude-code",
     });
     const { server, sessions } = createGateway({
@@ -106,7 +115,7 @@ describe("gateway http", () => {
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     const { port } = server.address() as AddressInfo;
-    const first = new WebSocket(
+    const first = openAuthenticatedSocket(
       `ws://127.0.0.1:${port}/v1/voice?token=test-token&userId=default&mode=ptt`,
     );
 
@@ -130,7 +139,7 @@ describe("gateway http", () => {
       await waitFor(() => session.sink.lastEventId >= cursor + 3);
       assert.equal(sessions.get("default"), session);
 
-      const second = new WebSocket(
+      const second = openAuthenticatedSocket(
         `ws://127.0.0.1:${port}/v1/voice?token=test-token&userId=default&mode=ptt&focused=false&afterEventId=${cursor}`,
       );
       const replayed = await collectJsonUntil(
@@ -164,6 +173,69 @@ describe("gateway http", () => {
       assert.deepEqual(await killed.json(), { ok: true, killed: 1 });
     } finally {
       first.close();
+      await new Promise<void>((resolve, reject) =>
+        server.close((err) => (err ? reject(err) : resolve())),
+      );
+      await store.close();
+    }
+  });
+
+  it("surfaces a clone failure and never unlocks voice", async () => {
+    const store = new MemoryConfigStore();
+    const { server, sessions } = createGateway({
+      token: "test-token",
+      store,
+      deepgramKey: "test-stt-key",
+      boxCommand: ["node", "--import", "tsx", failingProvisionBox],
+    });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const { port } = server.address() as AddressInfo;
+    const ws = openAuthenticatedSocket(
+      `ws://127.0.0.1:${port}/v1/voice?token=test-token&userId=default&mode=ptt`,
+    );
+    const messages: Record<string, unknown>[] = [];
+    try {
+      const closeCode = await new Promise<number>((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error("provision failure timeout")),
+          5_000,
+        );
+        ws.on("message", (data) => {
+          messages.push(JSON.parse(String(data)) as Record<string, unknown>);
+        });
+        ws.on("close", (code) => {
+          clearTimeout(timer);
+          resolve(code);
+        });
+        ws.on("error", reject);
+      });
+      assert.equal(closeCode, 4503);
+      assert.equal(sessions.has("default"), false);
+      assert.equal(messages.some((message) => message.type === "ready"), false);
+      assert.equal(
+        messages.some(
+          (message) =>
+            message.type === "provisioning" &&
+            message.repository === "acme/missing",
+        ),
+        true,
+      );
+      assert.equal(
+        messages.some(
+          (message) =>
+            message.type === "error" && message.message === "clone denied",
+        ),
+        true,
+      );
+    } finally {
+      ws.close();
+      await fetch(
+        `http://127.0.0.1:${port}/v1/session/kill?userId=default`,
+        {
+          method: "POST",
+          headers: { authorization: "Bearer test-token" },
+        },
+      );
       await new Promise<void>((resolve, reject) =>
         server.close((err) => (err ? reject(err) : resolve())),
       );
@@ -209,7 +281,82 @@ describe("gateway http", () => {
       await store.close();
     }
   });
+
+  it("serves an authorized model catalog and rejects unknown harnesses", async () => {
+    const store = new MemoryConfigStore();
+    await store.save("default", {
+      repo: { url: "", credential: "", repositories: [] },
+      harness: "codex",
+    });
+    const { server } = createGateway({
+      token: "test-token",
+      store,
+      boxCommand: ["node", "--import", "tsx", fakeBox],
+    });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const { port } = server.address() as AddressInfo;
+    try {
+      const denied = await fetch(
+        `http://127.0.0.1:${port}/v1/model-catalog?harness=claude-code`,
+      );
+      assert.equal(denied.status, 401);
+
+      const unknown = await fetch(
+        `http://127.0.0.1:${port}/v1/model-catalog?harness=nope`,
+        { headers: { authorization: "Bearer test-token" } },
+      );
+      assert.equal(unknown.status, 400);
+      assert.deepEqual(await unknown.json(), { error: "unknown harness" });
+
+      const listed = await fetch(
+        `http://127.0.0.1:${port}/v1/model-catalog?harness=claude-code`,
+        { headers: { authorization: "Bearer test-token" } },
+      );
+      assert.equal(listed.status, 200);
+      const claude = (await listed.json()) as {
+        harness: string;
+        models: {
+          id: string;
+          label: string;
+          efforts: string[];
+          default?: boolean;
+        }[];
+      };
+      assert.equal(claude.harness, "claude-code");
+      assert.equal(claude.models[0]?.id, "claude-sonnet-5");
+      assert.equal(claude.models[0]?.label, "Sonnet 5");
+      assert.equal(claude.models[0]?.default, true);
+      assert.deepEqual(claude.models[0]?.efforts, [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+      ]);
+
+      const fromConfig = await fetch(
+        `http://127.0.0.1:${port}/v1/model-catalog`,
+        { headers: { authorization: "Bearer test-token" } },
+      );
+      assert.equal(fromConfig.status, 200);
+      const body = (await fromConfig.json()) as { harness: string };
+      assert.equal(body.harness, "codex");
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((err) => (err ? reject(err) : resolve())),
+      );
+      await store.close();
+    }
+  });
 });
+
+function openAuthenticatedSocket(url: string): WebSocket {
+  const ws = new WebSocket(url);
+  ws.on("open", () => {
+    ws.send(JSON.stringify({ type: "git_auth", credential: "" }));
+  });
+  return ws;
+}
 
 function waitForJson(
   ws: WebSocket,

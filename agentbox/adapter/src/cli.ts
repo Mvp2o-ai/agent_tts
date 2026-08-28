@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
-import type { Harness, HarnessEvents } from "./harness.js";
+import type { Harness, HarnessEvents, HarnessRunOpts } from "./harness.js";
 
 export interface StreamMapper {
   sessionId?: string;
@@ -154,11 +154,11 @@ export function jsonlHarness(opts: {
   cwd: string;
   env?: NodeJS.ProcessEnv;
   mapper: StreamMapper;
-  argsFor: (prompt: string, sessionId?: string) => string[];
+  argsFor: (prompt: string, sessionId?: string, opts?: HarnessRunOpts) => string[];
 }): Harness {
   return {
-    async run(prompt, events, signal) {
-      const args = opts.argsFor(prompt, opts.mapper.sessionId);
+    async run(prompt, events, signal, runOpts) {
+      const args = opts.argsFor(prompt, opts.mapper.sessionId, runOpts);
       return runJsonlCli({
         bin: opts.bin,
         args,

@@ -49,6 +49,56 @@ describe("cursorArgv", () => {
       "hi",
     ]);
   });
+
+  it("inserts --model and ignores effort", () => {
+    const argv = cursorArgv("hi", undefined, {
+      model: "gpt-5.2-high",
+      effort: "high",
+    });
+    assert.deepEqual(argv, [
+      "-p",
+      "--force",
+      "--trust",
+      "--approve-mcps",
+      "--sandbox",
+      "disabled",
+      "--output-format",
+      "stream-json",
+      "--stream-partial-output",
+      "--model",
+      "gpt-5.2-high",
+      "--",
+      "hi",
+    ]);
+    assert.equal(argv.includes("--effort"), false);
+  });
+
+  it("does not emit an effort flag when only effort is passed", () => {
+    assert.deepEqual(cursorArgv("hi", undefined, { effort: "high" }), cursorArgv("hi"));
+  });
+
+  it("inserts --model with --resume", () => {
+    assert.deepEqual(
+      cursorArgv("hi", "chat_1", { model: "gpt-5.2", effort: "xhigh" }),
+      [
+        "-p",
+        "--force",
+        "--trust",
+        "--approve-mcps",
+        "--sandbox",
+        "disabled",
+        "--output-format",
+        "stream-json",
+        "--stream-partial-output",
+        "--model",
+        "gpt-5.2",
+        "--resume",
+        "chat_1",
+        "--",
+        "hi",
+      ],
+    );
+  });
 });
 
 describe("CursorStreamMapper", () => {

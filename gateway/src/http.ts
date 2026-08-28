@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
-import { WebSocketServer, type WebSocket } from "ws";
+import WebSocket, { WebSocketServer } from "ws";
+import type { RawData } from "ws";
 import type { ConfigStore } from "./config-store.js";
 import type { UserConfig } from "./config-schema.js";
 import { HARNESS_ORDER } from "./config-schema.js";
@@ -11,6 +12,7 @@ import { openDeepgram, type SttStream } from "./deepgram.js";
 import { VOICE_AUDIO_FORMAT } from "./elevenlabs.js";
 import { SessionSink } from "./session-sink.js";
 import { VoiceInput } from "./voice-input.js";
+import { modelCatalogFor } from "./model-catalog.js";
 
 /** Headless API. The only client is the mobile app. */
 export interface GatewayOptions {
@@ -20,7 +22,7 @@ export interface GatewayOptions {
   elevenKey?: string;
   /** Adapter argv, spawned as a child process per session. */
   boxCommand: string[];
-  /** Harness working directory (empty at container start; agent clones). */
+  /** Ephemeral workspace provisioned before the harness starts. */
   workspaceDir?: string;
   /**
    * Invoked by POST /v1/session/reset after sessions close. Production exits
@@ -90,6 +92,23 @@ async function handleHttp(
       return;
     }
     json(res, 200, { harnesses: HARNESS_ORDER });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/v1/model-catalog") {
+    if (!authorize(req, opts.token, url)) {
+      json(res, 401, { error: "unauthorized" });
+      return;
+    }
+    const userId = url.searchParams.get("userId") || "default";
+    const requested = url.searchParams.get("harness")?.trim() || undefined;
+    const harness = requested ?? (await opts.store.get(userId)).harness;
+    const catalog = modelCatalogFor(harness);
+    if (!catalog) {
+      json(res, 400, { error: "unknown harness" });
+      return;
+    }
+    json(res, 200, catalog);
     return;
   }
 
@@ -200,7 +219,11 @@ async function debugPrompt(
     });
   };
 
-  turn = new AgentTurn(box, sink, config, opts.elevenKey, { onIdle: endOnce });
+  turn = new AgentTurn(box, sink, config, opts.elevenKey, {
+    onIdle: endOnce,
+    getConfig: () => opts.store.get(userId),
+  });
+  turn.initialize(config.repo.credential);
   turn.enqueue(text);
 }
 
@@ -232,6 +255,7 @@ async function handleVoice(
     ws.close(4500, "no stt");
     return;
   }
+  const gitAuth = captureGitCredential(ws);
 
   let session: VoiceSession;
   try {
@@ -242,6 +266,7 @@ async function handleVoice(
       pendingSessions,
     );
   } catch (err) {
+    gitAuth.cancel();
     ws.send(
       JSON.stringify({
         type: "error",
@@ -272,6 +297,51 @@ async function handleVoice(
   session.attachment = attachment;
   session.sink.attach(ws, focused);
   session.turn.setSpeechEnabled(focused);
+  const cleanupAttachment = () => {
+    attachment.stt?.close();
+    attachment.stt = undefined;
+    if (session.attachment !== attachment) return;
+    session.attachment = undefined;
+    session.turn.setSpeechEnabled(false);
+    session.sink.detach(ws);
+  };
+  ws.once("close", cleanupAttachment);
+
+  if (!session.turn.isInitializationStarted) {
+    const credential = await gitAuth.promise;
+    if (
+      credential === null ||
+      session.attachment !== attachment ||
+      ws.readyState !== WebSocket.OPEN
+    ) {
+      return;
+    }
+    session.turn.initialize(credential);
+  } else {
+    gitAuth.cancel();
+  }
+  const provisioningAtAttach = !session.turn.isReady;
+  if (provisioningAtAttach) {
+    session.sink.replayAfter(afterEventId ?? 0);
+  }
+
+  try {
+    await session.turn.ready;
+  } catch (err) {
+    if (sessions.get(userId) === session) sessions.delete(userId);
+    await session.turn.close().catch(() => undefined);
+    if (session.attachment === attachment && ws.readyState === WebSocket.OPEN) {
+      ws.send(
+        JSON.stringify({
+          type: "error",
+          message: err instanceof Error ? err.message : String(err),
+        }),
+      );
+      ws.close(4503, "provisioning failed");
+    }
+    return;
+  }
+  if (session.attachment !== attachment || ws.readyState !== WebSocket.OPEN) return;
 
   const attachStt = () => {
     attachment.stt?.close();
@@ -298,7 +368,9 @@ async function handleVoice(
       audioFormat: VOICE_AUDIO_FORMAT,
     }),
   );
-  if (afterEventId !== undefined) session.sink.replayAfter(afterEventId);
+  if (!provisioningAtAttach && afterEventId !== undefined) {
+    session.sink.replayAfter(afterEventId);
+  }
 
   ws.on("message", (raw, isBinary) => {
     if (session.attachment !== attachment) return;
@@ -343,14 +415,46 @@ async function handleVoice(
     if (msg.type === "abort") input.userAbort();
   });
 
-  ws.on("close", () => {
-    attachment.stt?.close();
-    attachment.stt = undefined;
-    if (session.attachment !== attachment) return;
-    session.attachment = undefined;
-    session.turn.setSpeechEnabled(false);
-    session.sink.detach(ws);
+}
+
+function captureGitCredential(ws: WebSocket): {
+  promise: Promise<string | null>;
+  cancel(): void;
+} {
+  let settle: ((credential: string | null) => void) | undefined;
+  const promise = new Promise<string | null>((resolve) => {
+    const finish = (credential: string | null) => {
+      ws.off("message", onMessage);
+      ws.off("close", onClose);
+      resolve(credential);
+    };
+    const onClose = () => finish(null);
+    const onMessage = (raw: RawData, isBinary: boolean) => {
+      if (isBinary) return;
+      try {
+        const msg = JSON.parse(bufferText(raw)) as {
+          type?: unknown;
+          credential?: unknown;
+        };
+        if (
+          msg.type === "git_auth" &&
+          typeof msg.credential === "string" &&
+          msg.credential.length <= 65_536
+        ) {
+          finish(msg.credential);
+        }
+      } catch {
+        // Ignore malformed pre-ready messages.
+      }
+    };
+    settle = finish;
+    ws.on("message", onMessage);
+    ws.once("close", onClose);
   });
+  return {
+    promise,
+    cancel: () => settle?.(null),
+  };
 }
 
 async function teardownUserSessions(
@@ -379,7 +483,9 @@ async function getOrCreateVoiceSession(
   const creating = (async () => {
     const config = await opts.store.get(userId);
     const sink = new SessionSink();
-    const turn = new AgentTurn(openBox(opts, config), sink, config, opts.elevenKey);
+    const turn = new AgentTurn(openBox(opts, config), sink, config, opts.elevenKey, {
+      getConfig: () => opts.store.get(userId),
+    });
     const session = { userId, config, sink, turn };
     sessions.set(userId, session);
     return session;

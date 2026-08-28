@@ -43,6 +43,78 @@ describe("claudeArgv", () => {
       "hi",
     ]);
   });
+
+  it("inserts --model before the prompt separator", () => {
+    assert.deepEqual(claudeArgv("hi", undefined, { model: "claude-opus-4-6" }), [
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--include-partial-messages",
+      "--dangerously-skip-permissions",
+      "--model",
+      "claude-opus-4-6",
+      "--",
+      "hi",
+    ]);
+  });
+
+  it("inserts --effort before the prompt separator", () => {
+    assert.deepEqual(claudeArgv("hi", undefined, { effort: "high" }), [
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--include-partial-messages",
+      "--dangerously-skip-permissions",
+      "--effort",
+      "high",
+      "--",
+      "hi",
+    ]);
+  });
+
+  it("inserts model and effort before the prompt separator", () => {
+    assert.deepEqual(
+      claudeArgv("hi", undefined, { model: "claude-sonnet-4-6", effort: "max" }),
+      [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--dangerously-skip-permissions",
+        "--model",
+        "claude-sonnet-4-6",
+        "--effort",
+        "max",
+        "--",
+        "hi",
+      ],
+    );
+  });
+
+  it("inserts model and effort with --resume before the prompt separator", () => {
+    assert.deepEqual(
+      claudeArgv("hi", "ses_1", { model: "claude-sonnet-4-6", effort: "xhigh" }),
+      [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--dangerously-skip-permissions",
+        "--model",
+        "claude-sonnet-4-6",
+        "--effort",
+        "xhigh",
+        "--resume",
+        "ses_1",
+        "--",
+        "hi",
+      ],
+    );
+  });
 });
 
 describe("ClaudeStreamMapper", () => {

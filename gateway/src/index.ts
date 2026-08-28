@@ -38,8 +38,10 @@ const { server } = createGateway({
   },
 });
 
-server.listen(PORT, () => {
-  process.stderr.write(`agent_tts gateway listening on :${PORT}\n`);
+// Bind all interfaces. Container hosts (Railway, Compose, k8s) inject PORT
+// and reject the process if it only listens on localhost.
+server.listen(PORT, "0.0.0.0", () => {
+  process.stderr.write(`agent_tts gateway listening on 0.0.0.0:${PORT}\n`);
 });
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {

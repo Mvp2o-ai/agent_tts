@@ -9,12 +9,21 @@ export const HARNESSES: { id: HarnessId; label: string; keyEnv: string }[] = [
 
 export const HARNESS_IDS: readonly HarnessId[] = HARNESSES.map((h) => h.id);
 
+export interface AttachedRepository {
+  id: number;
+  fullName: string;
+  cloneUrl: string;
+  defaultBranch?: string;
+  private?: boolean;
+}
+
 export interface AgentProfile {
   id: string;
   name: string;
   gatewayUrl: string;
   token: string;
   gitCredentialId?: string;
+  repositories?: AttachedRepository[];
   modelCredentialIds?: Record<string, string>;
 }
 
@@ -26,6 +35,8 @@ export interface DeviceSettings {
   gitPat: string;
   defaultBranch: string;
   harness: HarnessId;
+  model: string;
+  effort: string;
   modelKeys: Record<string, string>;
   stopWord: string;
   voiceId: string;
@@ -43,6 +54,8 @@ export const DEFAULT_DEVICE_SETTINGS: DeviceSettings = {
   gitPat: "",
   defaultBranch: "",
   harness: "claude-code",
+  model: "",
+  effort: "",
   modelKeys: {},
   stopWord: "hard stop",
   voiceId: "",
@@ -88,9 +101,38 @@ function parseAgentProfile(value: unknown): AgentProfile | null {
     ...(typeof o.gitCredentialId === "string"
       ? { gitCredentialId: o.gitCredentialId }
       : {}),
+    ...(Array.isArray(o.repositories)
+      ? {
+          repositories: o.repositories
+            .map(parseRepository)
+            .filter((repo): repo is AttachedRepository => repo !== null),
+        }
+      : {}),
     ...(o.modelCredentialIds && typeof o.modelCredentialIds === "object"
       ? { modelCredentialIds: asModelKeys(o.modelCredentialIds) }
       : {}),
+  };
+}
+
+function parseRepository(value: unknown): AttachedRepository | null {
+  if (!value || typeof value !== "object") return null;
+  const repo = value as Record<string, unknown>;
+  if (
+    !Number.isSafeInteger(repo.id) ||
+    Number(repo.id) <= 0 ||
+    typeof repo.fullName !== "string" ||
+    typeof repo.cloneUrl !== "string"
+  ) {
+    return null;
+  }
+  return {
+    id: Number(repo.id),
+    fullName: repo.fullName,
+    cloneUrl: repo.cloneUrl,
+    ...(typeof repo.defaultBranch === "string"
+      ? { defaultBranch: repo.defaultBranch }
+      : {}),
+    ...(typeof repo.private === "boolean" ? { private: repo.private } : {}),
   };
 }
 
@@ -128,6 +170,15 @@ export function activeAgent(s: DeviceSettings): AgentProfile {
   return s.agents.find((a) => a.id === s.activeAgentId) ?? s.agents[0]!;
 }
 
+/** Switching harness invalidates model/effort IDs from the previous catalog. */
+export function withHarness(
+  settings: DeviceSettings,
+  harness: HarnessId,
+): DeviceSettings {
+  if (settings.harness === harness) return settings;
+  return { ...settings, harness, model: "", effort: "" };
+}
+
 export function parseDeviceSettings(raw: string): DeviceSettings {
   let parsed: unknown;
   try {
@@ -149,6 +200,8 @@ export function parseDeviceSettings(raw: string): DeviceSettings {
     gitPat: asString(o.gitPat, ""),
     defaultBranch: asString(o.defaultBranch, ""),
     harness: isHarnessId(harness) ? harness : DEFAULT_DEVICE_SETTINGS.harness,
+    model: asString(o.model, ""),
+    effort: asString(o.effort, ""),
     modelKeys: asModelKeys(o.modelKeys),
     stopWord: asString(o.stopWord, DEFAULT_DEVICE_SETTINGS.stopWord),
     voiceId: asString(o.voiceId, ""),
@@ -163,6 +216,8 @@ export function serializeDeviceSettings(settings: DeviceSettings): string {
     repoUrl: settings.repoUrl,
     defaultBranch: settings.defaultBranch,
     harness: settings.harness,
+    model: settings.model,
+    effort: settings.effort,
     stopWord: settings.stopWord,
     voiceId: settings.voiceId,
   });

@@ -49,6 +49,84 @@ describe("codexArgv", () => {
       "hi",
     ]);
   });
+
+  it("inserts --model as an exec option", () => {
+    assert.deepEqual(codexArgv("/workspace", "hi", undefined, { model: "gpt-5.4" }), [
+      "exec",
+      "--json",
+      "--dangerously-bypass-approvals-and-sandbox",
+      "--dangerously-bypass-hook-trust",
+      "-c",
+      `projects."/workspace".trust_level="trusted"`,
+      "--model",
+      "gpt-5.4",
+      "hi",
+    ]);
+  });
+
+  it("inserts TOML-quoted model_reasoning_effort as a -c option", () => {
+    const argv = codexArgv("/workspace", "hi", undefined, { effort: "high" });
+    const effortIdx = argv.indexOf(`model_reasoning_effort="high"`);
+    assert.ok(effortIdx > 0);
+    assert.equal(argv[effortIdx - 1], "-c");
+    assert.deepEqual(argv, [
+      "exec",
+      "--json",
+      "--dangerously-bypass-approvals-and-sandbox",
+      "--dangerously-bypass-hook-trust",
+      "-c",
+      `projects."/workspace".trust_level="trusted"`,
+      "-c",
+      `model_reasoning_effort="high"`,
+      "hi",
+    ]);
+  });
+
+  it("inserts model and effort as exec options", () => {
+    assert.deepEqual(
+      codexArgv("/workspace", "hi", undefined, {
+        model: "gpt-5.4",
+        effort: "low",
+      }),
+      [
+        "exec",
+        "--json",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--dangerously-bypass-hook-trust",
+        "-c",
+        `projects."/workspace".trust_level="trusted"`,
+        "--model",
+        "gpt-5.4",
+        "-c",
+        `model_reasoning_effort="low"`,
+        "hi",
+      ],
+    );
+  });
+
+  it("carries model and effort flags on exec resume", () => {
+    assert.deepEqual(
+      codexArgv("/workspace", "hi", "thr_1", {
+        model: "gpt-5.4",
+        effort: "high",
+      }),
+      [
+        "exec",
+        "resume",
+        "--json",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--dangerously-bypass-hook-trust",
+        "-c",
+        `projects."/workspace".trust_level="trusted"`,
+        "--model",
+        "gpt-5.4",
+        "-c",
+        `model_reasoning_effort="high"`,
+        "thr_1",
+        "hi",
+      ],
+    );
+  });
 });
 
 describe("codexHarnessEnv", () => {
@@ -85,6 +163,8 @@ describe("createCodexHarness", () => {
       assert.match(config, /sandbox_mode = "danger-full-access"/);
       assert.match(config, /cli_auth_credentials_store = "file"/);
       assert.match(config, /trust_level = "trusted"/);
+      assert.doesNotMatch(config, /model_reasoning_effort/);
+      assert.doesNotMatch(config, /^model\s*=/m);
       const auth = await readFile(join(home, "auth.json"), "utf8");
       assert.match(auth, /OPENAI_API_KEY/);
       assert.doesNotMatch(config, /sk-test-not-a-real-key/);

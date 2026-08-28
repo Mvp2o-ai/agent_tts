@@ -17,11 +17,11 @@ export class MemoryConfigStore implements ConfigStore {
   private data = new Map<string, UserConfig>();
 
   async get(userId: string): Promise<UserConfig> {
-    return this.data.get(userId) ?? defaultConfig(userId);
+    return withoutGitCredential(this.data.get(userId) ?? defaultConfig(userId));
   }
 
   async save(userId: string, patch: Partial<UserConfig>): Promise<UserConfig> {
-    const next = mergeConfig(await this.get(userId), patch);
+    const next = withoutGitCredential(mergeConfig(await this.get(userId), patch));
     this.data.set(userId, next);
     return next;
   }
@@ -55,11 +55,23 @@ export class SqliteConfigStore implements ConfigStore {
       .prepare("SELECT config FROM user_config WHERE user_id = ?")
       .get(userId) as { config: string } | undefined;
     if (!row) return defaultConfig(userId);
-    return JSON.parse(row.config) as UserConfig;
+    const merged = mergeConfig(
+      defaultConfig(userId),
+      JSON.parse(row.config) as Partial<UserConfig>,
+    );
+    const sanitized = withoutGitCredential(merged);
+    if (merged.repo.credential) {
+      this.db
+        .prepare(
+          "UPDATE user_config SET config = ?, updated_at = ? WHERE user_id = ?",
+        )
+        .run(JSON.stringify(sanitized), new Date().toISOString(), userId);
+    }
+    return sanitized;
   }
 
   async save(userId: string, patch: Partial<UserConfig>): Promise<UserConfig> {
-    const next = mergeConfig(await this.get(userId), patch);
+    const next = withoutGitCredential(mergeConfig(await this.get(userId), patch));
     this.db
       .prepare(
         `INSERT INTO user_config (user_id, config, updated_at)
@@ -75,4 +87,14 @@ export class SqliteConfigStore implements ConfigStore {
   async close(): Promise<void> {
     this.db.close();
   }
+}
+
+function withoutGitCredential(config: UserConfig): UserConfig {
+  return {
+    ...config,
+    repo: {
+      ...config.repo,
+      credential: "",
+    },
+  };
 }

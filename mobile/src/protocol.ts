@@ -26,7 +26,7 @@ export type IncomingFrame =
   | { kind: "unknown" };
 
 const FATAL_CLOSE_CODES = new Set([4400, 4401, 4403, 4500, 4503]);
-const DEFAULT_MAX_RECONNECTS = 3;
+const DEFAULT_MAX_RECONNECTS = 8;
 
 export function normalizeGatewayUrl(url: string): string {
   return url.trim().replace(/\/+$/, "");
@@ -81,6 +81,11 @@ export function voiceUrl(
 export function configUrl(conn: Connection): string {
   const base = normalizeGatewayUrl(conn.gatewayUrl);
   return `${base}/v1/config?userId=${encodeURIComponent(conn.userId)}`;
+}
+
+export function modelCatalogUrl(baseUrl: string, harness: string): string {
+  const base = normalizeGatewayUrl(baseUrl);
+  return `${base}/v1/model-catalog?harness=${encodeURIComponent(harness)}`;
 }
 
 export function killSessionUrl(conn: Connection): string {

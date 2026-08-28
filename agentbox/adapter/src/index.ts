@@ -3,9 +3,10 @@
  *
  * Env:
  *  AGENT_TTS_HARNESS          claude-code | cursor-cli | gemini-cli | codex
- *  AGENT_TTS_GIT_CREDENTIAL   PAT for git extraheader + GH_TOKEN
+ *  initialize.credential      session-only token for git extraheader + GH_TOKEN
  *  AGENT_TTS_GIT_HOST         extraheader host (default github.com)
- *  AGENT_TTS_WORKSPACE        default /workspace (starts empty; agent clones)
+ *  AGENT_TTS_REPOSITORIES     JSON array of repositories to provision
+ *  AGENT_TTS_WORKSPACE        default /workspace
  *
  * Model keys (ANTHROPIC_API_KEY, CURSOR_API_KEY, GEMINI_API_KEY,
  * OPENAI_API_KEY, …) are passed through from the gateway.
@@ -15,6 +16,10 @@
 import { createInterface } from "node:readline";
 import { installHarnessGitAuth } from "./git.js";
 import type { Harness } from "./harness.js";
+import {
+  parseAttachedRepositories,
+  provisionRepositories,
+} from "./provision.js";
 import {
   encodeOutbound,
   parseInbound,
@@ -31,31 +36,23 @@ function emit(msg: BoxOutbound): void {
 }
 
 async function main(): Promise<void> {
-  const credential = process.env.AGENT_TTS_GIT_CREDENTIAL ?? "";
+  const legacyCredential = process.env.AGENT_TTS_GIT_CREDENTIAL ?? "";
   const host =
     process.env.AGENT_TTS_GIT_HOST || process.env.AGENT_TTS_REPO_URL || "";
-  // Auth only. Do not clone: the harness owns remotes, branches, and PRs.
-  installHarnessGitAuth(host, credential);
+  const repositories = parseAttachedRepositories(
+    process.env.AGENT_TTS_REPOSITORIES,
+  );
   delete process.env.AGENT_TTS_GIT_CREDENTIAL;
+  delete process.env.AGENT_TTS_REPOSITORIES;
 
-  let harness: Harness;
-  try {
-    harness = selectHarness(harnessId, workspace);
-  } catch (err) {
-    emit({
-      type: "error",
-      message: err instanceof Error ? err.message : String(err),
-    });
-    process.exit(1);
-  }
-
-  process.stderr.write(`agentbox adapter ready harness=${harnessId}\n`);
-
+  let harness: Harness | null = null;
+  let initializing = false;
+  let initialized = false;
   let inFlight: { id: string; abort: AbortController } | null = null;
   let stdinClosed = false;
 
   const maybeExit = () => {
-    if (stdinClosed && !inFlight) process.exit(0);
+    if (stdinClosed && !initializing && !inFlight) process.exit(0);
   };
 
   const rl = createInterface({ input: process.stdin });
@@ -81,6 +78,44 @@ async function main(): Promise<void> {
       return;
     }
 
+    if (msg.type === "initialize") {
+      if (initialized || initializing) return;
+      initializing = true;
+      installHarnessGitAuth(host, msg.credential ?? legacyCredential);
+      void provisionRepositories({
+        workspace,
+        repositories,
+        onProgress: (progress) => emit({ type: "provisioning", ...progress }),
+      })
+        .then(() => {
+          harness = selectHarness(harnessId, workspace);
+          initialized = true;
+          process.stderr.write(`agentbox adapter ready harness=${harnessId}\n`);
+          emit({ type: "ready", repositories: repositories.length });
+        })
+        .catch((err: unknown) => {
+          process.stdout.write(encodeOutbound({
+            type: "error",
+            message: err instanceof Error ? err.message : String(err),
+          }), () => process.exit(1));
+        })
+        .finally(() => {
+          initializing = false;
+          maybeExit();
+        });
+      return;
+    }
+
+    if (!initialized || !harness) {
+      emit({
+        type: "error",
+        promptId: msg.id,
+        message: "agentbox is still provisioning",
+      });
+      return;
+    }
+    const currentHarness = harness;
+
     if (inFlight) {
       emit({
         type: "error",
@@ -94,7 +129,7 @@ async function main(): Promise<void> {
     inFlight = { id: msg.id, abort };
     const promptId = msg.id;
 
-    void harness
+    void currentHarness
       .run(
         msg.text,
         {
@@ -103,6 +138,7 @@ async function main(): Promise<void> {
             emit({ type: "tool_event", promptId, summary }),
         },
         abort.signal,
+        { model: msg.model, effort: msg.effort },
       )
       .then((status) => {
         emit(

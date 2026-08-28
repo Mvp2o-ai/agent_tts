@@ -91,6 +91,8 @@ function setup(openTts?: OpenTts) {
       idleCount += 1;
     },
   });
+  turn.initialize();
+  box.emit({ type: "ready", repositories: 0 });
   return { box, events, audio, turn, idle: () => idleCount };
 }
 
@@ -305,7 +307,7 @@ describe("AgentTurn", () => {
     const { box, events, turn } = setup();
     turn.abort("user");
     assert.equal(events.length, 0);
-    assert.equal(box.sent.length, 0);
+    assert.deepEqual(box.sent, [{ type: "initialize" }]);
     await turn.close();
   });
 
@@ -477,4 +479,63 @@ describe("AgentTurn", () => {
     assert.equal(box.prompts().length, 2);
     await turn.close();
   });
+
+  it("omits model and effort on the prompt wire when unset", async () => {
+    const { box, turn } = setup();
+    turn.enqueue("plain");
+    const prompt = box.prompts()[0];
+    assert.equal(prompt.text, "plain");
+    assert.equal("model" in prompt, false);
+    assert.equal("effort" in prompt, false);
+    await turn.close();
+  });
+
+  it("sends model and effort on each prompt and re-reads them between turns", async () => {
+    const box = new MemoryBox();
+    const sink: VoiceSink = {
+      sendJson: () => {},
+      sendAudio: () => {},
+    };
+    let cfg = defaultConfig("u");
+    cfg.model = "claude-sonnet-5";
+    cfg.effort = "low";
+    const turn = new AgentTurn(box, sink, defaultConfig("u"), undefined, {
+      getConfig: () => Promise.resolve(cfg),
+    });
+    turn.initialize();
+    box.emit({ type: "ready", repositories: 0 });
+
+    turn.enqueue("one");
+    await microtasks();
+    const first = box.prompts()[0];
+    assert.ok(first);
+    assert.equal(first.text, "one");
+    assert.equal(first.model, "claude-sonnet-5");
+    assert.equal(first.effort, "low");
+
+    box.emit({ type: "done", promptId: first.id });
+    cfg = { ...cfg, model: "not-in-catalog-yet", effort: "max" };
+    turn.enqueue("two");
+    await microtasks();
+    const second = box.prompts()[1];
+    assert.equal(second.text, "two");
+    assert.equal(second.model, "not-in-catalog-yet");
+    assert.equal(second.effort, "max");
+
+    box.emit({ type: "done", promptId: second.id });
+    cfg = { ...defaultConfig("u") };
+    turn.enqueue("three");
+    await microtasks();
+    const third = box.prompts()[2];
+    assert.equal(third.text, "three");
+    assert.equal("model" in third, false);
+    assert.equal("effort" in third, false);
+
+    await turn.close();
+  });
 });
+
+async function microtasks(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}

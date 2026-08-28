@@ -1,4 +1,4 @@
-import type { Harness, HarnessEvents } from "../harness.js";
+import type { Harness, HarnessEvents, HarnessRunOpts } from "../harness.js";
 import { jsonlHarness, type StreamMapper } from "../cli.js";
 
 export class ClaudeStreamMapper implements StreamMapper {
@@ -67,7 +67,11 @@ export class ClaudeStreamMapper implements StreamMapper {
 }
 
 /** Docker is the isolation boundary; Anthropic requires non-root + this flag. */
-export function claudeArgv(prompt: string, sessionId?: string): string[] {
+export function claudeArgv(
+  prompt: string,
+  sessionId?: string,
+  opts?: HarnessRunOpts,
+): string[] {
   const args = [
     "-p",
     "--output-format",
@@ -76,6 +80,8 @@ export function claudeArgv(prompt: string, sessionId?: string): string[] {
     "--include-partial-messages",
     "--dangerously-skip-permissions",
   ];
+  if (opts?.model) args.push("--model", opts.model);
+  if (opts?.effort) args.push("--effort", opts.effort);
   if (sessionId) args.push("--resume", sessionId);
   args.push("--", prompt);
   return args;
@@ -87,6 +93,6 @@ export function createClaudeCodeHarness(cwd: string): Harness {
     bin: process.env.AGENT_TTS_CLAUDE_BIN ?? "claude",
     cwd,
     mapper,
-    argsFor: (prompt, sessionId) => claudeArgv(prompt, sessionId),
+    argsFor: (prompt, sessionId, opts) => claudeArgv(prompt, sessionId, opts),
   });
 }

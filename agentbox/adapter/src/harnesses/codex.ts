@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { Harness, HarnessEvents } from "../harness.js";
+import type { Harness, HarnessEvents, HarnessRunOpts } from "../harness.js";
 import { jsonlHarness, type StreamMapper } from "../cli.js";
 
 /**
@@ -123,6 +123,8 @@ export function ensureCodexAuth(home = process.env.CODEX_HOME ?? join(homedir(),
 /**
  * OpenAI: inside Docker, disable the inner Linux sandbox, skip project
  * trust prompts, and keep credentials in a file (no OS keyring).
+ * Per-prompt model/effort stay on the argv (`--model`, `-c
+ * model_reasoning_effort=…`); writing them here would leak into other sessions.
  */
 export function ensureCodexYoloConfig(
   cwd: string,
@@ -153,6 +155,7 @@ export function codexArgv(
   cwd: string,
   prompt: string,
   sessionId?: string,
+  opts?: HarnessRunOpts,
 ): string[] {
   const flags = [
     "--json",
@@ -161,6 +164,8 @@ export function codexArgv(
     "-c",
     `projects.${JSON.stringify(cwd)}.trust_level="trusted"`,
   ];
+  if (opts?.model) flags.push("--model", opts.model);
+  if (opts?.effort) flags.push("-c", `model_reasoning_effort="${opts.effort}"`);
   if (sessionId) {
     return ["exec", "resume", ...flags, sessionId, prompt];
   }
@@ -176,6 +181,6 @@ export function createCodexHarness(cwd: string): Harness {
     cwd,
     env: codexHarnessEnv(),
     mapper,
-    argsFor: (prompt, sessionId) => codexArgv(cwd, prompt, sessionId),
+    argsFor: (prompt, sessionId, opts) => codexArgv(cwd, prompt, sessionId, opts),
   });
 }

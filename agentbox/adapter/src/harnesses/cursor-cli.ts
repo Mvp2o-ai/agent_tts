@@ -1,4 +1,4 @@
-import type { Harness, HarnessEvents } from "../harness.js";
+import type { Harness, HarnessEvents, HarnessRunOpts } from "../harness.js";
 import { contentText, jsonlHarness, type StreamMapper } from "../cli.js";
 
 /**
@@ -71,7 +71,11 @@ function summarizeCursorTool(toolCall: unknown): string {
  * skips the workspace prompt. Cursor's own OS sandbox denies network by
  * default and nests badly in Docker — disable it; the box is the sandbox.
  */
-export function cursorArgv(prompt: string, sessionId?: string): string[] {
+export function cursorArgv(
+  prompt: string,
+  sessionId?: string,
+  opts?: HarnessRunOpts,
+): string[] {
   const args = [
     "-p",
     "--force",
@@ -83,6 +87,7 @@ export function cursorArgv(prompt: string, sessionId?: string): string[] {
     "stream-json",
     "--stream-partial-output",
   ];
+  if (opts?.model) args.push("--model", opts.model);
   if (sessionId) args.push("--resume", sessionId);
   args.push("--", prompt);
   return args;
@@ -94,6 +99,6 @@ export function createCursorCliHarness(cwd: string): Harness {
     bin: process.env.AGENT_TTS_CURSOR_BIN ?? "agent",
     cwd,
     mapper,
-    argsFor: (prompt, sessionId) => cursorArgv(prompt, sessionId),
+    argsFor: (prompt, sessionId, opts) => cursorArgv(prompt, sessionId, opts),
   });
 }

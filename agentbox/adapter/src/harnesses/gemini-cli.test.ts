@@ -40,6 +40,50 @@ describe("geminiArgv", () => {
       "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
     ]);
   });
+
+  it("inserts --model and ignores effort", () => {
+    const argv = geminiArgv("hi", undefined, {
+      model: "gemini-3-pro",
+      effort: "high",
+    });
+    assert.deepEqual(argv, [
+      "-p",
+      "hi",
+      "--output-format",
+      "stream-json",
+      "--yolo",
+      "--skip-trust",
+      "--model",
+      "gemini-3-pro",
+    ]);
+    assert.equal(argv.includes("--effort"), false);
+    assert.equal(argv.includes("--model-thinking-level"), false);
+  });
+
+  it("does not emit thinking flags when only effort is passed", () => {
+    assert.deepEqual(geminiArgv("hi", undefined, { effort: "high" }), geminiArgv("hi"));
+  });
+
+  it("inserts --model with --resume", () => {
+    assert.deepEqual(
+      geminiArgv("hi", "a1b2c3d4-e5f6-7890-abcd-ef1234567890", {
+        model: "gemini-3-flash",
+        effort: "max",
+      }),
+      [
+        "-p",
+        "hi",
+        "--output-format",
+        "stream-json",
+        "--yolo",
+        "--skip-trust",
+        "--model",
+        "gemini-3-flash",
+        "--resume",
+        "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      ],
+    );
+  });
 });
 
 describe("GeminiStreamMapper", () => {

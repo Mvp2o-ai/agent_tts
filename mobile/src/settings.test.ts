@@ -7,6 +7,7 @@ import {
   memoryKeyValueStore,
   parseDeviceSettings,
   serializeDeviceSettings,
+  withHarness,
 } from "./settings";
 
 describe("device settings", () => {
@@ -20,6 +21,13 @@ describe("device settings", () => {
           gatewayUrl: "http://10.0.0.8:4100",
           token: "gateway-token",
           gitCredentialId: "git-1",
+          repositories: [
+            {
+              id: 7,
+              fullName: "acme/api",
+              cloneUrl: "https://github.com/acme/api.git",
+            },
+          ],
           modelCredentialIds: { ANTHROPIC_API_KEY: "model-1" },
         },
       ],
@@ -33,8 +41,11 @@ describe("device settings", () => {
     assert.equal(activeAgent(parsed).gatewayUrl, "http://10.0.0.8:4100");
     assert.equal(parsed.gitPat, "");
     assert.equal(parsed.harness, "gemini-cli");
+    assert.equal(parsed.model, "");
+    assert.equal(parsed.effort, "");
     assert.equal(parsed.modelKeys.ANTHROPIC_API_KEY, undefined);
     assert.equal(activeAgent(parsed).gitCredentialId, "git-1");
+    assert.equal(activeAgent(parsed).repositories?.[0]?.fullName, "acme/api");
     assert.equal(
       activeAgent(parsed).modelCredentialIds?.ANTHROPIC_API_KEY,
       "model-1",
@@ -43,10 +54,54 @@ describe("device settings", () => {
 
   it("falls back on corrupt JSON and unknown harnesses", () => {
     assert.equal(parseDeviceSettings("not-json").harness, "claude-code");
+    assert.equal(parseDeviceSettings("not-json").model, "");
+    assert.equal(parseDeviceSettings("not-json").effort, "");
     assert.equal(
       parseDeviceSettings(JSON.stringify({ harness: "nope" })).harness,
       "claude-code",
     );
+    assert.equal(
+      parseDeviceSettings(JSON.stringify({ model: 1, effort: null })).model,
+      "",
+    );
+    assert.equal(
+      parseDeviceSettings(JSON.stringify({ model: 1, effort: null })).effort,
+      "",
+    );
+  });
+
+  it("round-trips model and effort overrides", () => {
+    const settings = {
+      ...DEFAULT_DEVICE_SETTINGS,
+      harness: "codex" as const,
+      model: "gpt-5",
+      effort: "high",
+    };
+    const parsed = parseDeviceSettings(serializeDeviceSettings(settings));
+    assert.equal(parsed.harness, "codex");
+    assert.equal(parsed.model, "gpt-5");
+    assert.equal(parsed.effort, "high");
+    const serialized = JSON.parse(serializeDeviceSettings(parsed)) as Record<
+      string,
+      unknown
+    >;
+    assert.equal(serialized.model, "gpt-5");
+    assert.equal(serialized.effort, "high");
+  });
+
+  it("resets model and effort when the harness changes", () => {
+    const settings = {
+      ...DEFAULT_DEVICE_SETTINGS,
+      harness: "claude-code" as const,
+      model: "sonnet",
+      effort: "high",
+    };
+    const next = withHarness(settings, "codex");
+    assert.equal(next.harness, "codex");
+    assert.equal(next.model, "");
+    assert.equal(next.effort, "");
+    assert.equal(withHarness(settings, "claude-code"), settings);
+    assert.equal(withHarness(settings, "claude-code").model, "sonnet");
   });
 
   it("migrates legacy v1 gatewayUrl/token into a single Project 1 profile", () => {
@@ -67,6 +122,8 @@ describe("device settings", () => {
     assert.equal(parsed.activeAgentId, "agent-1");
     assert.equal(parsed.userId, "ken");
     assert.equal(parsed.harness, "codex");
+    assert.equal(parsed.model, "");
+    assert.equal(parsed.effort, "");
     assert.equal(parsed.gitPat, "ghp_example");
     assert.equal(activeAgent(parsed).token, "legacy-token");
 

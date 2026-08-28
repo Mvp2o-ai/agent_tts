@@ -3,10 +3,19 @@
  */
 
 export type BoxInbound =
-  | { type: "prompt"; id: string; text: string }
+  | { type: "initialize"; credential?: string }
+  | { type: "prompt"; id: string; text: string; model?: string; effort?: string }
   | { type: "abort"; reason: "stop_word" | "user" };
 
 export type BoxOutbound =
+  | {
+      type: "provisioning";
+      stage: "preparing" | "cloning" | "starting_harness";
+      repository?: string;
+      index?: number;
+      total: number;
+    }
+  | { type: "ready"; repositories: number }
   | { type: "chunk"; promptId: string; text: string }
   | { type: "tool_event"; promptId: string; summary: string }
   | { type: "done"; promptId: string }
@@ -15,21 +24,50 @@ export type BoxOutbound =
 
 export type HarnessId = "claude-code" | "gemini-cli" | "codex" | "cursor-cli";
 
+function optionalPromptString(value: unknown, field: "model" | "effort"): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") {
+    throw new Error(`prompt ${field} must be a non-empty string`);
+  }
+  if (value === "") return undefined;
+  return value;
+}
+
 export function parseInbound(line: string): BoxInbound {
-  const msg = JSON.parse(line) as BoxInbound;
+  const msg = JSON.parse(line) as { type?: string } & Record<string, unknown>;
+  if (msg.type === "initialize") {
+    if (msg.credential !== undefined && typeof msg.credential !== "string") {
+      throw new Error("initialize credential must be a string");
+    }
+    return {
+      type: "initialize",
+      ...(typeof msg.credential === "string"
+        ? { credential: msg.credential }
+        : {}),
+    };
+  }
   if (msg.type === "prompt") {
     if (!msg.id || typeof msg.text !== "string") {
       throw new Error("prompt requires id and text");
     }
-    return msg;
+    const model = optionalPromptString(msg.model, "model");
+    const effort = optionalPromptString(msg.effort, "effort");
+    return {
+      type: "prompt",
+      id: String(msg.id),
+      text: msg.text,
+      ...(model !== undefined ? { model } : {}),
+      ...(effort !== undefined ? { effort } : {}),
+    };
   }
   if (msg.type === "abort") {
-    if (msg.reason !== "stop_word" && msg.reason !== "user") {
+    const reason = msg.reason;
+    if (reason !== "stop_word" && reason !== "user") {
       throw new Error("abort requires reason stop_word|user");
     }
-    return msg;
+    return { type: "abort", reason };
   }
-  throw new Error(`unknown inbound type: ${(msg as { type: string }).type}`);
+  throw new Error(`unknown inbound type: ${msg.type}`);
 }
 
 export function encodeOutbound(msg: BoxOutbound): string {

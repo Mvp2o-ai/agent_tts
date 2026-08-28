@@ -5,6 +5,7 @@ import {
   connectionError,
   httpToWs,
   killSessionUrl,
+  modelCatalogUrl,
   nextReconnectDelay,
   validateReadyAudioFormat,
   voiceUrl,
@@ -44,6 +45,10 @@ describe("protocol", () => {
         userId: "ken",
       }),
       "https://gw.example/v1/session/kill?userId=ken",
+    );
+    assert.equal(
+      modelCatalogUrl("https://gw.example/", "claude-code"),
+      "https://gw.example/v1/model-catalog?harness=claude-code",
     );
   });
 
@@ -115,7 +120,7 @@ describe("protocol", () => {
       1000,
     );
     assert.equal(
-      nextReconnectDelay({ userClosed: false, attempt: 3, closeCode: 1006 }),
+      nextReconnectDelay({ userClosed: false, attempt: 8, closeCode: 1006 }),
       null,
     );
   });

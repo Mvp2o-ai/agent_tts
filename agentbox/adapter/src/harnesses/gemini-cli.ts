@@ -1,4 +1,4 @@
-import type { Harness, HarnessEvents } from "../harness.js";
+import type { Harness, HarnessEvents, HarnessRunOpts } from "../harness.js";
 import { jsonlHarness, type StreamMapper } from "../cli.js";
 
 /**
@@ -94,7 +94,11 @@ export class GeminiStreamMapper implements StreamMapper {
  */
 export const GEMINI_YOLO_ENV = { GEMINI_CLI_TRUST_WORKSPACE: "true" };
 
-export function geminiArgv(prompt: string, sessionId?: string): string[] {
+export function geminiArgv(
+  prompt: string,
+  sessionId?: string,
+  opts?: HarnessRunOpts,
+): string[] {
   const args = [
     "-p",
     prompt,
@@ -103,6 +107,7 @@ export function geminiArgv(prompt: string, sessionId?: string): string[] {
     "--yolo",
     "--skip-trust",
   ];
+  if (opts?.model) args.push("--model", opts.model);
   if (sessionId) args.push("--resume", sessionId);
   return args;
 }
@@ -114,6 +119,6 @@ export function createGeminiCliHarness(cwd: string): Harness {
     cwd,
     env: GEMINI_YOLO_ENV,
     mapper,
-    argsFor: (prompt, sessionId) => geminiArgv(prompt, sessionId),
+    argsFor: (prompt, sessionId, opts) => geminiArgv(prompt, sessionId, opts),
   });
 }
