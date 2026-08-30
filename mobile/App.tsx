@@ -56,7 +56,6 @@ import {
 } from "./src/settings";
 import { useDeviceSettings } from "./src/useDeviceSettings";
 import { useVoiceSession, type VoiceMode } from "./src/useVoiceSession";
-import { saveVoiceSecrets as persistVoiceSecrets } from "./src/voice-credentials";
 import { hydrateVoiceProviderId } from "./src/voice-providers";
 import {
   AddAgentScreen,
@@ -335,10 +334,7 @@ export default function App() {
     onCredentialsChanged: refreshCredentials,
     sttProviderId,
     ttsProviderId,
-    saveVoiceSecrets: async (input) => {
-      await persistVoiceSecrets(credentialVault, input);
-      await refreshCredentials();
-    },
+    openAppSettings: () => setShowAppSettings(true),
   });
 
   const removeAgent = async (profile: AgentProfile) => {

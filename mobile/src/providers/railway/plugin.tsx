@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { AgentProfile } from "../../settings";
 import { findVoiceCredential } from "../../voice-credentials";
-import {
-  getVoiceProvider,
-  requiredSecretFields,
-} from "../../voice-providers";
+import { getVoiceProvider } from "../../voice-providers";
 import { useRailwayLauncher } from "../../useRailwayLauncher";
 import type { ProviderPlugin, ProviderSetupContext } from "../types";
 import { RailwayAgentScreen } from "./SetupScreen";
@@ -60,31 +57,16 @@ export function useRailwayProvider(
       setName("");
     },
     renderSetup(onBack) {
-      const requiredFields = requiredSecretFields(
-        context.sttProviderId,
-        context.ttsProviderId,
-      );
-      const missingVoiceFields = (
+      const missingVoiceCredentials = (
         [
           ["stt", context.sttProviderId],
           ["tts", context.ttsProviderId],
         ] as const
       ).flatMap(([role, providerId]) => {
         if (findVoiceCredential(context.credentials, providerId)) return [];
-        const provider = getVoiceProvider(role, providerId);
-        return requiredFields
-          .filter((field) =>
-            provider.credentialFields.some(
-              (candidate) =>
-                candidate.id === field.id && candidate.env === field.env,
-            ),
-          )
-          .map((field) => ({
-            providerId,
-            env: field.env,
-            label: field.label,
-            ...(field.hint ? { hint: field.hint } : {}),
-          }));
+        return getVoiceProvider(role, providerId)
+          .credentialFields.filter((field) => field.secret)
+          .map((field) => field.label);
       });
       return (
         <RailwayAgentScreen
@@ -94,14 +76,13 @@ export function useRailwayProvider(
           workspaces={launcher.workspaces}
           selectedWorkspaceId={workspaceId}
           name={name}
-          missingVoiceFields={missingVoiceFields}
-          voiceConfigured={missingVoiceFields.length === 0}
+          missingVoiceCredentials={missingVoiceCredentials}
           launchPhase={launcher.phaseLabel}
           error={launcher.error}
           onConnect={() => void launcher.connect()}
           onSelectWorkspace={setWorkspaceId}
           onNameChange={setName}
-          onSaveVoiceSecrets={context.saveVoiceSecrets}
+          onOpenAppSettings={context.openAppSettings}
           onLaunch={() =>
             void launcher.launch({
               name,

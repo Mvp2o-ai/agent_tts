@@ -43,9 +43,11 @@ export interface ProviderSetupContext {
   onCredentialsChanged: () => void;
   sttProviderId: string;
   ttsProviderId: string;
-  saveVoiceSecrets: (
-    input: readonly { providerId: string; secret: string }[],
-  ) => Promise<void>;
+  /**
+   * Voice providers and credentials are app-level Settings. Host setup
+   * screens send the user there instead of collecting keys inline.
+   */
+  openAppSettings: () => void;
   onReady: (providerId: string, agentId: string) => void;
 }
 

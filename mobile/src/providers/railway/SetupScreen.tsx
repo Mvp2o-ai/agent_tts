@@ -1,5 +1,4 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import { useState } from "react";
 import { Button, Card, Field } from "../../ui/components";
 import { SetupShell } from "../../ui/AgentSetup";
 import { color, font, radius, space } from "../../ui/theme";
@@ -17,14 +16,13 @@ export function RailwayAgentScreen({
   workspaces,
   selectedWorkspaceId,
   name,
-  missingVoiceFields,
-  voiceConfigured,
+  missingVoiceCredentials,
   launchPhase,
   error,
   onConnect,
   onSelectWorkspace,
   onNameChange,
-  onSaveVoiceSecrets,
+  onOpenAppSettings,
   onLaunch,
   onBack,
 }: {
@@ -34,50 +32,19 @@ export function RailwayAgentScreen({
   workspaces: RailwayWorkspaceOption[];
   selectedWorkspaceId: string;
   name: string;
-  missingVoiceFields: {
-    providerId: string;
-    env: string;
-    label: string;
-    hint?: string;
-  }[];
-  voiceConfigured: boolean;
+  /** Labels of app-level voice credentials not yet saved in App Settings. */
+  missingVoiceCredentials: string[];
   launchPhase?: string;
   error?: string;
   onConnect: () => void;
   onSelectWorkspace: (workspaceId: string) => void;
   onNameChange: (value: string) => void;
-  onSaveVoiceSecrets: (
-    input: readonly { providerId: string; secret: string }[],
-  ) => Promise<void>;
+  onOpenAppSettings: () => void;
   onLaunch: () => void;
   onBack: () => void;
 }) {
   const launching = Boolean(launchPhase);
-  const [voiceSecrets, setVoiceSecrets] = useState<Record<string, string>>({});
-  const [voiceKeysBusy, setVoiceKeysBusy] = useState(false);
-  const [voiceKeysError, setVoiceKeysError] = useState("");
-
-  const saveRequiredVoiceKeys = async () => {
-    setVoiceKeysBusy(true);
-    setVoiceKeysError("");
-    try {
-      await onSaveVoiceSecrets(
-        missingVoiceFields.map((field) => ({
-          providerId: field.providerId,
-          secret: voiceSecrets[voiceFieldKey(field)] ?? "",
-        })),
-      );
-      setVoiceSecrets({});
-    } catch (cause) {
-      setVoiceKeysError(
-        cause instanceof Error
-          ? cause.message
-          : "Could not save app credentials.",
-      );
-    } finally {
-      setVoiceKeysBusy(false);
-    }
-  };
+  const voiceConfigured = missingVoiceCredentials.length === 0;
 
   return (
     <SetupShell
@@ -156,40 +123,15 @@ export function RailwayAgentScreen({
           </Card>
           {!voiceConfigured ? (
             <Card style={styles.formCard}>
-              <Text style={styles.warningTitle}>Finish app setup</Text>
+              <Text style={styles.warningTitle}>App Settings incomplete</Text>
               <Text style={styles.connectionDetail}>
-                Required voice provider credentials are saved securely on this
-                device and reused for future launches.
+                Launching needs the voice credentials for your selected
+                providers: {missingVoiceCredentials.join(", ")}. They are
+                app-level settings, saved once and reused for every launch.
               </Text>
-              {missingVoiceFields.map((field) => (
-                <Field
-                  key={voiceFieldKey(field)}
-                  label={field.label}
-                  value={voiceSecrets[voiceFieldKey(field)] ?? ""}
-                  onChange={(value) =>
-                    setVoiceSecrets((current) => ({
-                      ...current,
-                      [voiceFieldKey(field)]: value,
-                    }))
-                  }
-                  autoCapitalize="none"
-                  secure
-                  mono
-                  hint={field.hint}
-                />
-              ))}
-              {voiceKeysError ? (
-                <Text style={styles.error}>{voiceKeysError}</Text>
-              ) : null}
               <Button
-                label="Save and continue"
-                busy={voiceKeysBusy}
-                disabled={
-                  missingVoiceFields.some(
-                    (field) => !(voiceSecrets[voiceFieldKey(field)] ?? "").trim(),
-                  )
-                }
-                onPress={() => void saveRequiredVoiceKeys()}
+                label="Open App Settings"
+                onPress={onOpenAppSettings}
               />
             </Card>
           ) : (
@@ -222,10 +164,6 @@ export function RailwayAgentScreen({
       ) : null}
     </SetupShell>
   );
-}
-
-function voiceFieldKey(field: { providerId: string; env: string }): string {
-  return `${field.providerId}:${field.env}`;
 }
 
 const styles = StyleSheet.create({
