@@ -123,14 +123,16 @@ export function RailwayAgentScreen({
           </Card>
           {!voiceConfigured ? (
             <Card style={styles.formCard}>
-              <Text style={styles.warningTitle}>App Settings incomplete</Text>
+              <Text style={styles.warningTitle}>
+                One more thing before launch
+              </Text>
               <Text style={styles.connectionDetail}>
-                Launching needs the voice credentials for your selected
-                providers: {missingVoiceCredentials.join(", ")}. They are
-                app-level settings, saved once and reused for every launch.
+                Your agent needs a voice. Add your{" "}
+                {missingVoiceCredentials.join(" and ")} in Settings — once
+                saved on this phone, every future launch reuses them.
               </Text>
               <Button
-                label="Open App Settings"
+                label="Add voice keys"
                 onPress={onOpenAppSettings}
               />
             </Card>
@@ -138,7 +140,7 @@ export function RailwayAgentScreen({
             <View style={styles.readyRow}>
               <View style={styles.readyDot} />
               <Text style={styles.readyText}>
-                App credentials ready for launch
+                Voice keys ready — you're good to launch
               </Text>
             </View>
           )}
