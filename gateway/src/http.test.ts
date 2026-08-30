@@ -35,6 +35,27 @@ describe("gateway http", () => {
       const denied = await fetch(`http://127.0.0.1:${port}/v1/config?userId=default`);
       assert.equal(denied.status, 401);
 
+      const capabilitiesDenied = await fetch(
+        `http://127.0.0.1:${port}/v1/capabilities`,
+      );
+      assert.equal(capabilitiesDenied.status, 401);
+
+      const capabilities = await fetch(
+        `http://127.0.0.1:${port}/v1/capabilities`,
+        { headers: { authorization: "Bearer test-token" } },
+      );
+      assert.equal(capabilities.status, 200);
+      const capabilityBody = (await capabilities.json()) as {
+        stt: { providerId: string; providers: { id: string }[] };
+        tts: { providerId: string; providers: { id: string }[] };
+        audioFormat: typeof VOICE_AUDIO_FORMAT;
+      };
+      assert.equal(capabilityBody.stt.providerId, "deepgram");
+      assert.equal(capabilityBody.tts.providerId, "elevenlabs");
+      assert.ok(capabilityBody.stt.providers.some((p) => p.id === "deepgram"));
+      assert.ok(capabilityBody.tts.providers.some((p) => p.id === "elevenlabs"));
+      assert.deepEqual(capabilityBody.audioFormat, VOICE_AUDIO_FORMAT);
+
       const cfg = await fetch(
         `http://127.0.0.1:${port}/v1/config?userId=default`,
         { headers: { authorization: "Bearer test-token" } },

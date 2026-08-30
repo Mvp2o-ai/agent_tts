@@ -18,6 +18,8 @@ cd mobile
 npm install
 export EXPO_PUBLIC_GITHUB_CLIENT_ID=<github-app-client-id>
 export EXPO_PUBLIC_GITHUB_APP_SLUG=<github-app-slug>
+# Optional for a fork:
+# export EXPO_PUBLIC_AGENT_RUNTIME_IMAGE=ghcr.io/your-org/agent_tts@sha256:...
 npx expo run:ios          # Simulator, generates ios/ locally (gitignored)
 # or
 npx expo run:android
@@ -43,17 +45,20 @@ The public GitHub App client ID and slug are compiled from the two
 `EXPO_PUBLIC_GITHUB_*` values above; no client secret is used. Non-secret
 settings live in **device-local AsyncStorage** (`agent_tts.deviceSettings.v1`):
 
-- Gateway URL, gateway token, user id
+- Gateway URL, gateway-credential reference, user id
 - GitHub credential references and per-agent selected repository metadata
 - Harness, model-key references, stop word, ElevenLabs voice id
 
-GitHub user access tokens and model API keys are stored separately in the
-native secure credential library. They survive app restart on that phone but
-are never written to AsyncStorage. Uninstalling the app clears them.
+Gateway bearer tokens, GitHub user access tokens, model API keys, and
+voice-provider API keys are stored separately in the native secure credential
+library. They survive app restart on that phone but are never written to
+AsyncStorage. Uninstalling the app clears them.
 
 **Save** PUTs selected repository metadata / harness / keys / voice to the
 gateway SQLite store. GitHub tokens remain in native secure storage and are
 sent over the authenticated voice socket only when a session starts.
+Voice-provider keys selected during a provider launch are copied directly into
+that new deployment's host variables by its provider plugin.
 **Load config** pulls the non-GitHub-secret gateway copy back into the form.
 Connection fields (URL / token / user id) are device-only; the gateway never
 stores them for you.
@@ -61,24 +66,44 @@ stores them for you.
 `localhost` on a phone is the phone itself, not your laptop. Use a LAN IP
 (`http://192.168.x.x:4100`) or an `https://` URL in front of the gateway.
 
+## Provider plugins
+
+Installed hosting providers are registered in `src/providers/registry.tsx`.
+Each provider owns its authorization, setup screen, provisioning state, and
+remote lifecycle implementation. Generic app code consumes the registry and
+does not branch on provider IDs. See
+[`docs/deployment/provider-drivers.md`](../docs/deployment/provider-drivers.md)
+before adding a provider.
+
 ## Engineer distribution (EAS)
 
-Physical-device install is an EAS internal development-client **build page URL**,
-opened in Safari on the phone — not USB `expo run:ios --device`. Profiles live
-in `eas.json` (run from `mobile/` after `npx eas-cli login` and `npx eas-cli init`
-once per Expo account). Keep `extra.eas.projectId` in gitignored
-`eas-project.local.json`; do not commit an Expo owner or project id.
+Physical-device install is an EAS internal **build page URL**,
+opened in Safari on the phone — not USB `expo run:ios --device`. The guided
+bring-your-own-account flow creates a standalone app and runs from the
+repository root:
+
+```bash
+npm run mobile:install
+```
+
+It creates gitignored `app-identity.local.json` and
+`eas-project.local.json`, submits the selected platform without waiting, and
+prints the install page. See
+[`docs/mobile-distribution.md`](../docs/mobile-distribution.md) for prerequisites,
+cost boundaries, public build variables, and repeat builds.
 
 | Profile | Purpose |
 |---|---|
 | `development-simulator` | iOS Simulator `.app` with expo-dev-client |
 | `development` | Device dev client (iOS internal + Android APK) |
+| `preview` | Standalone internal iOS app / Android APK (guided installer default) |
 | `apk` | Android release APK for sideload only |
 | `production` | iOS store-signed build for **TestFlight**, not a public App Store listing |
 
 ```bash
 npx eas-cli build --profile development-simulator --platform ios
-npm run eas:device:ios    # or: npx eas-cli build --profile development --platform ios
+npm run install:device -- ios
+npm run install:device -- android
 bash scripts/print-dev-link.sh
 npx eas-cli build --profile apk --platform android
 npx eas-cli build --profile production --platform ios
@@ -101,6 +126,8 @@ Identifiers already in the repo are engineer placeholders, not store listings:
   submit (`eas.json` `submit.production.ios` is empty until you set that)
 - An Expo account and EAS project (`npx eas-cli init` once; store
   `projectId` / optional `owner` in `eas-project.local.json`, not in git)
+- A globally unique bundle identifier / Android package stored in
+  `app-identity.local.json` (the guided installer creates it)
 
 iOS Simulator builds do not need a team id. Physical iOS devices and TestFlight do.
 

@@ -1,3 +1,9 @@
+import {
+  DEFAULT_STT_PROVIDER_ID,
+  DEFAULT_TTS_PROVIDER_ID,
+  hydrateVoiceProviderId,
+} from "./voice-providers";
+
 export type HarnessId = "claude-code" | "cursor-cli" | "gemini-cli" | "codex";
 
 export const HARNESSES: { id: HarnessId; label: string; keyEnv: string }[] = [
@@ -17,15 +23,58 @@ export interface AttachedRepository {
   private?: boolean;
 }
 
+export interface AgentRuntimeSettings {
+  harness?: HarnessId;
+  model?: string;
+  effort?: string;
+  repoUrl?: string;
+  defaultBranch?: string;
+  stopWord?: string;
+  voiceId?: string;
+}
+
+export type AgentOriginKind = "manual" | "provider";
+
+/**
+ * Provider-neutral lifecycle metadata. Values in this envelope must never
+ * contain provider credentials or gateway secrets.
+ */
+export interface AgentOriginMetadata {
+  kind?: AgentOriginKind;
+  providerId?: string;
+  provisioningId?: string;
+  provisioningPhase?: string;
+  resourceIds?: Record<string, string>;
+  provisioningDetails?: Record<string, string>;
+  endpointHostname?: string;
+  lastError?: string;
+}
+
+export type AgentProviderState = AgentOriginMetadata;
+
 export interface AgentProfile {
   id: string;
   name: string;
   gatewayUrl: string;
   token: string;
+  /**
+   * Desired host lifecycle. Optional only so existing in-memory callers can
+   * continue constructing profiles; hydration always supplies the default.
+   */
+  desiredState?: AgentDesiredState;
   gitCredentialId?: string;
+  gatewayCredentialId?: string;
+  providerCredentialId?: string;
+  hostCredentialIds?: Record<string, string>;
   repositories?: AttachedRepository[];
   modelCredentialIds?: Record<string, string>;
+  runtime?: AgentRuntimeSettings;
+  origin?: AgentOriginMetadata;
 }
+
+export type AgentDesiredState = "running" | "stopped";
+
+export const DEFAULT_AGENT_DESIRED_STATE: AgentDesiredState = "running";
 
 export interface DeviceSettings {
   agents: AgentProfile[];
@@ -40,13 +89,21 @@ export interface DeviceSettings {
   modelKeys: Record<string, string>;
   stopWord: string;
   voiceId: string;
+  sttProviderId: string;
+  ttsProviderId: string;
 }
 
 export const SETTINGS_STORAGE_KEY = "agent_tts.deviceSettings.v1";
 
 export const DEFAULT_DEVICE_SETTINGS: DeviceSettings = {
   agents: [
-    { id: "agent-1", name: "Project 1", gatewayUrl: "http://", token: "" },
+    {
+      id: "agent-1",
+      name: "Agent 1",
+      gatewayUrl: "http://",
+      token: "",
+      desiredState: DEFAULT_AGENT_DESIRED_STATE,
+    },
   ],
   activeAgentId: "agent-1",
   userId: "default",
@@ -59,6 +116,8 @@ export const DEFAULT_DEVICE_SETTINGS: DeviceSettings = {
   modelKeys: {},
   stopWord: "hard stop",
   voiceId: "",
+  sttProviderId: DEFAULT_STT_PROVIDER_ID,
+  ttsProviderId: DEFAULT_TTS_PROVIDER_ID,
 };
 
 export function isHarnessId(value: string): value is HarnessId {
@@ -78,6 +137,61 @@ function asModelKeys(value: unknown): Record<string, string> {
   return out;
 }
 
+function parseRuntime(value: unknown): AgentRuntimeSettings | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const o = value as Record<string, unknown>;
+  const runtime: AgentRuntimeSettings = {};
+  if (typeof o.harness === "string" && isHarnessId(o.harness)) {
+    runtime.harness = o.harness;
+  }
+  for (const key of [
+    "model",
+    "effort",
+    "repoUrl",
+    "defaultBranch",
+    "stopWord",
+    "voiceId",
+  ] as const) {
+    if (typeof o[key] === "string") runtime[key] = o[key];
+  }
+  return Object.keys(runtime).length > 0 ? runtime : undefined;
+}
+
+function parseOrigin(value: unknown): AgentOriginMetadata | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const o = value as Record<string, unknown>;
+  const origin: AgentOriginMetadata = {};
+  if (o.kind === "manual" || o.kind === "provider") origin.kind = o.kind;
+  for (const key of [
+    "providerId",
+    "provisioningId",
+    "provisioningPhase",
+    "endpointHostname",
+    "lastError",
+  ] as const) {
+    if (typeof o[key] === "string") origin[key] = o[key];
+  }
+  if (o.resourceIds && typeof o.resourceIds === "object" && !Array.isArray(o.resourceIds)) {
+    const resourceIds = asModelKeys(o.resourceIds);
+    if (Object.keys(resourceIds).length > 0) origin.resourceIds = resourceIds;
+  }
+  if (
+    o.provisioningDetails &&
+    typeof o.provisioningDetails === "object" &&
+    !Array.isArray(o.provisioningDetails)
+  ) {
+    const provisioningDetails = asModelKeys(o.provisioningDetails);
+    if (Object.keys(provisioningDetails).length > 0) {
+      origin.provisioningDetails = provisioningDetails;
+    }
+  }
+  return Object.keys(origin).length > 0 ? origin : undefined;
+}
+
 function cloneDefaultAgents(): AgentProfile[] {
   return DEFAULT_DEVICE_SETTINGS.agents.map((a) => ({ ...a }));
 }
@@ -93,13 +207,28 @@ function parseAgentProfile(value: unknown): AgentProfile | null {
   ) {
     return null;
   }
+  const runtime = parseRuntime(o.runtime);
+  const origin = parseOrigin(o.origin);
   return {
     id: o.id,
     name: o.name,
     gatewayUrl: o.gatewayUrl,
     token: o.token,
+    desiredState:
+      o.desiredState === "stopped" || o.desiredState === "running"
+        ? o.desiredState
+        : DEFAULT_AGENT_DESIRED_STATE,
     ...(typeof o.gitCredentialId === "string"
       ? { gitCredentialId: o.gitCredentialId }
+      : {}),
+    ...(typeof o.gatewayCredentialId === "string"
+      ? { gatewayCredentialId: o.gatewayCredentialId }
+      : {}),
+    ...(typeof o.providerCredentialId === "string"
+      ? { providerCredentialId: o.providerCredentialId }
+      : {}),
+    ...(o.hostCredentialIds && typeof o.hostCredentialIds === "object"
+      ? { hostCredentialIds: asModelKeys(o.hostCredentialIds) }
       : {}),
     ...(Array.isArray(o.repositories)
       ? {
@@ -111,6 +240,8 @@ function parseAgentProfile(value: unknown): AgentProfile | null {
     ...(o.modelCredentialIds && typeof o.modelCredentialIds === "object"
       ? { modelCredentialIds: asModelKeys(o.modelCredentialIds) }
       : {}),
+    ...(runtime ? { runtime } : {}),
+    ...(origin ? { origin } : {}),
   };
 }
 
@@ -147,9 +278,10 @@ function resolveAgents(o: Record<string, unknown>): AgentProfile[] {
     return [
       {
         id: "agent-1",
-        name: "Project 1",
+        name: "Agent 1",
         gatewayUrl: o.gatewayUrl,
         token: o.token,
+        desiredState: DEFAULT_AGENT_DESIRED_STATE,
       },
     ];
   }
@@ -169,6 +301,91 @@ function resolveActiveAgentId(
 export function activeAgent(s: DeviceSettings): AgentProfile {
   return s.agents.find((a) => a.id === s.activeAgentId) ?? s.agents[0]!;
 }
+
+export interface EffectiveAgentRuntimeSettings {
+  harness: HarnessId;
+  model: string;
+  effort: string;
+  repoUrl: string;
+  defaultBranch: string;
+  stopWord: string;
+  voiceId: string;
+}
+
+function isDeviceSettings(
+  value: DeviceSettings | AgentProfile,
+): value is DeviceSettings {
+  return "agents" in value;
+}
+
+/**
+ * Resolve profile overrides while retaining v1 top-level settings as
+ * migration fallbacks. Both argument orders are accepted for callers that
+ * naturally start from either the profile or the settings object.
+ */
+export function resolveAgentRuntimeSettings(
+  profile: AgentProfile,
+  settings: DeviceSettings,
+): EffectiveAgentRuntimeSettings;
+export function resolveAgentRuntimeSettings(
+  settings: DeviceSettings,
+  profile?: AgentProfile,
+): EffectiveAgentRuntimeSettings;
+export function resolveAgentRuntimeSettings(
+  first: DeviceSettings | AgentProfile,
+  second?: DeviceSettings | AgentProfile,
+): EffectiveAgentRuntimeSettings {
+  const settings = isDeviceSettings(first)
+    ? first
+    : (second as DeviceSettings);
+  const profile = isDeviceSettings(first)
+    ? (second as AgentProfile | undefined) ?? activeAgent(settings)
+    : first;
+  const runtime = profile.runtime;
+  const harness =
+    runtime?.harness && isHarnessId(runtime.harness)
+      ? runtime.harness
+      : settings.harness;
+  return {
+    harness,
+    model: runtime?.model ?? settings.model,
+    effort: runtime?.effort ?? settings.effort,
+    repoUrl: runtime?.repoUrl ?? settings.repoUrl,
+    defaultBranch: runtime?.defaultBranch ?? settings.defaultBranch,
+    stopWord: runtime?.stopWord ?? settings.stopWord,
+    voiceId: runtime?.voiceId ?? settings.voiceId,
+  };
+}
+
+export function updateAgentHarness(
+  settings: DeviceSettings,
+  agentId: string,
+  harness: HarnessId,
+): DeviceSettings {
+  const current = settings.agents.find((agent) => agent.id === agentId);
+  if (!current) return settings;
+  if (resolveAgentRuntimeSettings(current, settings).harness === harness) {
+    return settings;
+  }
+  return {
+    ...settings,
+    agents: settings.agents.map((agent) =>
+      agent.id === agentId
+        ? {
+            ...agent,
+            runtime: {
+              ...(agent.runtime ?? {}),
+              harness,
+              model: "",
+              effort: "",
+            },
+          }
+        : agent,
+    ),
+  };
+}
+
+export const withAgentHarness = updateAgentHarness;
 
 /** Switching harness invalidates model/effort IDs from the previous catalog. */
 export function withHarness(
@@ -205,12 +422,25 @@ export function parseDeviceSettings(raw: string): DeviceSettings {
     modelKeys: asModelKeys(o.modelKeys),
     stopWord: asString(o.stopWord, DEFAULT_DEVICE_SETTINGS.stopWord),
     voiceId: asString(o.voiceId, ""),
+    sttProviderId: hydrateVoiceProviderId(
+      "stt",
+      typeof o.sttProviderId === "string" ? o.sttProviderId : undefined,
+    ),
+    ttsProviderId: hydrateVoiceProviderId(
+      "tts",
+      typeof o.ttsProviderId === "string" ? o.ttsProviderId : undefined,
+    ),
   };
 }
 
 export function serializeDeviceSettings(settings: DeviceSettings): string {
   return JSON.stringify({
-    agents: settings.agents,
+    agents: settings.agents.map((agent) => ({
+      ...agent,
+      desiredState:
+        agent.desiredState === "stopped" ? "stopped" : DEFAULT_AGENT_DESIRED_STATE,
+      token: agent.gatewayCredentialId ? "" : agent.token,
+    })),
     activeAgentId: settings.activeAgentId,
     userId: settings.userId,
     repoUrl: settings.repoUrl,
@@ -220,6 +450,8 @@ export function serializeDeviceSettings(settings: DeviceSettings): string {
     effort: settings.effort,
     stopWord: settings.stopWord,
     voiceId: settings.voiceId,
+    sttProviderId: settings.sttProviderId,
+    ttsProviderId: settings.ttsProviderId,
   });
 }
 

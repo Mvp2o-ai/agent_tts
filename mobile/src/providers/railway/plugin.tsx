@@ -1,0 +1,139 @@
+import { useCallback, useEffect, useState } from "react";
+import type { AgentProfile } from "../../settings";
+import { findVoiceCredential } from "../../voice-credentials";
+import {
+  getVoiceProvider,
+  requiredSecretFields,
+} from "../../voice-providers";
+import { useRailwayLauncher } from "../../useRailwayLauncher";
+import type { ProviderPlugin, ProviderSetupContext } from "../types";
+import { RailwayAgentScreen } from "./SetupScreen";
+
+export const RAILWAY_PROVIDER_ID = "railway";
+
+export function useRailwayProvider(
+  context: ProviderSetupContext,
+): ProviderPlugin {
+  const [name, setName] = useState("");
+  const [workspaceId, setWorkspaceId] = useState("");
+
+  const onReady = useCallback(
+    (agentId: string) => {
+      setName("");
+      context.onReady(RAILWAY_PROVIDER_ID, agentId);
+    },
+    [context.onReady],
+  );
+
+  const launcher = useRailwayLauncher({
+    setSettings: context.setSettings,
+    onReady,
+    onCredentialsChanged: context.onCredentialsChanged,
+    sttProviderId: context.sttProviderId,
+    ttsProviderId: context.ttsProviderId,
+  });
+
+  useEffect(() => {
+    if (
+      workspaceId &&
+      launcher.workspaces.some((workspace) => workspace.id === workspaceId)
+    ) {
+      return;
+    }
+    const preferred =
+      launcher.workspaces.find(
+        (workspace) => workspace.plan === "HOBBY" || workspace.plan === "PRO",
+      ) ?? launcher.workspaces[0];
+    setWorkspaceId(preferred?.id ?? "");
+  }, [launcher.workspaces, workspaceId]);
+
+  return {
+    definition: {
+      id: RAILWAY_PROVIDER_ID,
+      label: "Railway",
+      badge: "AVAILABLE",
+      description:
+        "Authorize Railway, choose a workspace, and create an isolated agent deployment from this phone.",
+      actionLabel: "Continue with Railway",
+    },
+    prepareSetup() {
+      setName("");
+    },
+    renderSetup(onBack) {
+      const requiredFields = requiredSecretFields(
+        context.sttProviderId,
+        context.ttsProviderId,
+      );
+      const missingVoiceFields = (
+        [
+          ["stt", context.sttProviderId],
+          ["tts", context.ttsProviderId],
+        ] as const
+      ).flatMap(([role, providerId]) => {
+        if (findVoiceCredential(context.credentials, providerId)) return [];
+        const provider = getVoiceProvider(role, providerId);
+        return requiredFields
+          .filter((field) =>
+            provider.credentialFields.some(
+              (candidate) =>
+                candidate.id === field.id && candidate.env === field.env,
+            ),
+          )
+          .map((field) => ({
+            providerId,
+            env: field.env,
+            label: field.label,
+            ...(field.hint ? { hint: field.hint } : {}),
+          }));
+      });
+      return (
+        <RailwayAgentScreen
+          oauthConnected={launcher.oauthConnected}
+          oauthBusy={launcher.oauthBusy}
+          clientConfigured={launcher.clientConfigured}
+          workspaces={launcher.workspaces}
+          selectedWorkspaceId={workspaceId}
+          name={name}
+          missingVoiceFields={missingVoiceFields}
+          voiceConfigured={missingVoiceFields.length === 0}
+          launchPhase={launcher.phaseLabel}
+          error={launcher.error}
+          onConnect={() => void launcher.connect()}
+          onSelectWorkspace={setWorkspaceId}
+          onNameChange={setName}
+          onSaveVoiceSecrets={context.saveVoiceSecrets}
+          onLaunch={() =>
+            void launcher.launch({
+              name,
+              workspaceId,
+            })
+          }
+          onBack={onBack}
+        />
+      );
+    },
+    hostLabel() {
+      return "Railway";
+    },
+    async startAgent(profile) {
+      await launcher.startAgent(profile);
+    },
+    async stopAgent(profile) {
+      await launcher.stopAgent(profile);
+    },
+    async replaceAgent(profile) {
+      return launcher.replaceAgent(profile);
+    },
+    async deleteAgent(profile) {
+      await launcher.removeAgent(profile);
+    },
+    deleteConfirmation(profile: AgentProfile) {
+      return {
+        title: `Delete ${profile.name.trim() || "this"} agent?`,
+        message:
+          "This permanently deletes the provider deployment and its persistent configuration. Uncommitted work and saved gateway configuration will be lost.",
+        actionLabel: "Delete agent",
+      };
+    },
+  };
+}

@@ -1,10 +1,17 @@
-export type CredentialKind = "github-token" | "git-pat" | "model-key";
+export type CredentialKind =
+  | "github-token"
+  | "git-pat"
+  | "model-key"
+  | "gateway-token"
+  | "provider-oauth"
+  | "voice-key";
 
 export interface CredentialEntry {
   id: string;
   kind: CredentialKind;
   label: string;
   keyEnv?: string;
+  providerId?: string;
 }
 
 export interface SecureCredentialStore {
@@ -44,14 +51,18 @@ export function createCredentialVault(store: SecureCredentialStore) {
       kind: CredentialKind;
       label: string;
       keyEnv?: string;
+      providerId?: string;
       secret: string;
     }): Promise<CredentialEntry> {
       const id = input.id ?? newCredentialId();
+      const keyEnv = optionalMetadata(input.keyEnv);
+      const providerId = optionalMetadata(input.providerId);
       const entry: CredentialEntry = {
         id,
         kind: input.kind,
-        label: input.label.trim() || defaultLabel(input.kind, input.keyEnv),
-        ...(input.keyEnv ? { keyEnv: input.keyEnv } : {}),
+        label: input.label.trim() || defaultLabel(input.kind, providerId, keyEnv),
+        ...(keyEnv ? { keyEnv } : {}),
+        ...(providerId ? { providerId } : {}),
       };
       await store.setItemAsync(secretKey(id), input.secret);
       const entries = await readIndex();
@@ -75,9 +86,21 @@ function newCredentialId(): string {
   return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function defaultLabel(kind: CredentialKind, keyEnv?: string): string {
+function defaultLabel(
+  kind: CredentialKind,
+  providerId?: string,
+  keyEnv?: string,
+): string {
   if (kind === "github-token") return "GitHub account";
-  return kind === "git-pat" ? "Git credential" : keyEnv || "Model key";
+  if (kind === "git-pat") return "Git credential";
+  if (kind === "gateway-token") return "Gateway token";
+  if (kind === "provider-oauth") {
+    return providerId ? `${providerId} OAuth` : "Provider OAuth";
+  }
+  if (kind === "voice-key") {
+    return providerId ? `${providerId} voice key` : keyEnv || "Voice key";
+  }
+  return keyEnv || "Model key";
 }
 
 function parseEntry(value: unknown): CredentialEntry | null {
@@ -85,10 +108,15 @@ function parseEntry(value: unknown): CredentialEntry | null {
   const entry = value as Record<string, unknown>;
   if (
     typeof entry.id !== "string" ||
+    entry.id.trim().length === 0 ||
     typeof entry.label !== "string" ||
-    (entry.kind !== "github-token" &&
-      entry.kind !== "git-pat" &&
-      entry.kind !== "model-key")
+    entry.label.trim().length === 0 ||
+    !isCredentialKind(entry.kind) ||
+    (hasOwn(entry, "keyEnv") &&
+      (typeof entry.keyEnv !== "string" || entry.keyEnv.trim().length === 0)) ||
+    (hasOwn(entry, "providerId") &&
+      (typeof entry.providerId !== "string" ||
+        entry.providerId.trim().length === 0))
   ) {
     return null;
   }
@@ -97,5 +125,28 @@ function parseEntry(value: unknown): CredentialEntry | null {
     label: entry.label,
     kind: entry.kind,
     ...(typeof entry.keyEnv === "string" ? { keyEnv: entry.keyEnv } : {}),
+    ...(typeof entry.providerId === "string"
+      ? { providerId: entry.providerId }
+      : {}),
   };
+}
+
+function isCredentialKind(value: unknown): value is CredentialKind {
+  return (
+    value === "github-token" ||
+    value === "git-pat" ||
+    value === "model-key" ||
+    value === "gateway-token" ||
+    value === "provider-oauth" ||
+    value === "voice-key"
+  );
+}
+
+function hasOwn(value: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function optionalMetadata(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed || undefined;
 }

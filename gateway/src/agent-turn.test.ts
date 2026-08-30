@@ -85,7 +85,7 @@ function setup(openTts?: OpenTts) {
     sendJson: (e) => events.push(e),
     sendAudio: (b) => audio.push(b),
   };
-  const turn = new AgentTurn(box, sink, defaultConfig("u"), openTts ? "test-key" : undefined, {
+  const turn = new AgentTurn(box, sink, defaultConfig("u"), undefined, {
     openTts,
     onIdle: () => {
       idleCount += 1;

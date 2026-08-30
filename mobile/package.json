@@ -1,6 +1,6 @@
 {
   "name": "@agent_tts/mobile",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "private": true,
   "main": "expo/AppEntry",
   "scripts": {
@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test src/*.test.ts",
     "config:check": "expo config --type public",
+    "install:device": "bash scripts/eas-device-install.sh",
     "eas:device:ios": "npx eas-cli build --profile development --platform ios",
     "eas:device:android": "npx eas-cli build --profile development --platform android"
   },
@@ -18,9 +19,13 @@
     "babel-preset-expo": "~57.0.0",
     "expo": "~57.0.17",
     "expo-asset": "~57.0.15",
+    "expo-auth-session": "~57.0.10",
+    "expo-camera": "~57.0.4",
+    "expo-crypto": "~57.0.2",
     "expo-dev-client": "~57.0.16",
     "expo-secure-store": "~57.0.2",
     "expo-status-bar": "~57.0.1",
+    "expo-web-browser": "~57.0.2",
     "react": "19.2.3",
     "react-native": "0.86.3",
     "voice-audio": "file:./packages/voice-audio"

@@ -13,3 +13,4 @@ ios/
 android/
 .cursor/rules/*.local.mdc
 eas-project.local.json
+app-identity.local.json

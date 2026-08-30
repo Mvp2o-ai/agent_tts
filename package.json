@@ -1,7 +1,7 @@
 {
   "name": "agent_tts",
   "private": true,
-  "version": "0.0.1",
+  "version": "0.1.0",
   "license": "AGPL-3.0-only",
   "workspaces": [
     "gateway",
@@ -13,6 +13,7 @@
     "test": "npm run test --workspaces --if-present",
     "build": "npm run build --workspaces --if-present",
     "image": "docker build -t agent_tts:local -f gateway/Dockerfile .",
-    "dev:gateway": "npm run dev --workspace=@agent_tts/gateway"
+    "dev:gateway": "npm run dev --workspace=@agent_tts/gateway",
+    "mobile:install": "npm --prefix mobile run install:device"
   }
 }

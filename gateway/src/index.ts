@@ -24,11 +24,17 @@ const boxCommand = process.env.AGENTBOX_COMMAND?.trim()
   ? process.env.AGENTBOX_COMMAND.split(" ").filter(Boolean)
   : ["node", "/opt/adapter/dist/index.js"];
 
+const voiceSecrets: Record<string, string> = {};
+for (const [key, value] of Object.entries(process.env)) {
+  if (value) voiceSecrets[key] = value;
+}
+
 const { server } = createGateway({
   token,
   store,
-  deepgramKey: process.env.DEEPGRAM_API_KEY,
-  elevenKey: process.env.ELEVENLABS_API_KEY,
+  sttProviderId: process.env.STT_PROVIDER,
+  ttsProviderId: process.env.TTS_PROVIDER,
+  voiceSecrets,
   boxCommand,
   workspaceDir: process.env.WORKSPACE_DIR ?? "/workspace",
   onReset: () => {

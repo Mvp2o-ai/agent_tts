@@ -1,25 +1,17 @@
 import WebSocket from "ws";
+import type { SttStream, TranscriptEvent } from "./voice-providers.js";
+import {
+  STT_PREOPEN_BYTES,
+  STT_SAMPLE_RATE,
+} from "./voice-providers.js";
 
-export interface TranscriptEvent {
-  text: string;
-  isFinal: boolean;
-  speechStarted?: boolean;
-  utteranceEnd?: boolean;
-}
-
-export interface SttStream {
-  sendPcm(chunk: Buffer): void;
-  /** Stop sending audio but keep receiving until Deepgram flushes finals. */
-  finish(): void;
-  close(): void;
-}
-
-/** 16 kHz mono int16 — 3s is enough for CONNECTING without unbounded growth. */
-export const STT_SAMPLE_RATE = 16000;
-export const STT_BYTES_PER_SAMPLE = 2;
-export const STT_PREOPEN_MS = 3000;
-export const STT_PREOPEN_BYTES =
-  (STT_SAMPLE_RATE * STT_BYTES_PER_SAMPLE * STT_PREOPEN_MS) / 1000;
+export type { SttStream, TranscriptEvent } from "./voice-providers.js";
+export {
+  STT_BYTES_PER_SAMPLE,
+  STT_PREOPEN_BYTES,
+  STT_PREOPEN_MS,
+  STT_SAMPLE_RATE,
+} from "./voice-providers.js";
 
 /** Minimal transport so tests can drive CONNECTING/open/finish. */
 export interface SttTransport {

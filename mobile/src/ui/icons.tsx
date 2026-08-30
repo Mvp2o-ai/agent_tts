@@ -18,6 +18,47 @@ function box(size: number) {
   return [styles.box, { width: size, height: size }];
 }
 
+export function BrandIcon({
+  size = 28,
+  color = "#6C8CFF",
+}: IconProps): JSX.Element {
+  const barWidth = Math.max(1.5, size * 0.075);
+  const barHeights = [0.28, 0.52, 0.76, 0.52, 0.28];
+  const gap = size * 0.075;
+  const waveformWidth =
+    barHeights.length * barWidth + (barHeights.length - 1) * gap;
+  const waveformLeft = (size - waveformWidth) / 2;
+
+  return (
+    <View
+      style={[
+        box(size),
+        {
+          borderRadius: size * 0.28,
+          borderWidth: 1,
+          borderColor: color,
+          backgroundColor: "rgba(108, 140, 255, 0.14)",
+        },
+      ]}
+    >
+      {barHeights.map((height, index) => (
+        <View
+          key={index}
+          style={{
+            position: "absolute",
+            left: waveformLeft + index * (barWidth + gap),
+            top: size * (0.5 - height / 2),
+            width: barWidth,
+            height: size * height,
+            borderRadius: barWidth,
+            backgroundColor: color,
+          }}
+        />
+      ))}
+    </View>
+  );
+}
+
 function Slash({
   size,
   color,
@@ -592,6 +633,66 @@ export function LinkIcon({
           transform: [{ rotate: "-40deg" }],
         }}
       />
+    </View>
+  );
+}
+
+export function PencilIcon({
+  size = DEFAULT_SIZE,
+  color = DEFAULT_COLOR,
+}: IconProps): JSX.Element {
+  const stroke = strokeOf(size);
+  const length = size * 0.76;
+  const height = Math.max(stroke * 1.8, size * 0.16);
+  const tip = height * 0.72;
+  const body = length - tip;
+
+  return (
+    <View style={box(size)}>
+      <View
+        style={{
+          position: "absolute",
+          left: (size - length) / 2,
+          top: (size - height) / 2,
+          width: length,
+          height,
+          transform: [{ rotate: "-45deg" }],
+        }}
+      >
+        <View
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            width: tip,
+            height,
+            backgroundColor: color,
+            transform: [{ rotate: "45deg" }],
+          }}
+        />
+        <View
+          style={{
+            position: "absolute",
+            left: tip * 0.7,
+            top: 0,
+            width: body,
+            height,
+            borderRadius: height * 0.25,
+            backgroundColor: color,
+          }}
+        />
+        <View
+          style={{
+            position: "absolute",
+            right: height * 0.15,
+            top: height * 0.18,
+            width: stroke,
+            height: height * 0.64,
+            borderRadius: stroke / 2,
+            backgroundColor: "rgba(10, 11, 15, 0.42)",
+          }}
+        />
+      </View>
     </View>
   );
 }

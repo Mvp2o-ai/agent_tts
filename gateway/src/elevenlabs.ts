@@ -1,10 +1,7 @@
 import WebSocket from "ws";
+import type { TtsStream } from "./voice-providers.js";
 
-export interface TtsStream {
-  pushText(text: string): void;
-  finish(): void;
-  close(): void;
-}
+export type { TtsStream } from "./voice-providers.js";
 
 /** Minimal transport so tests can drive the CONNECTING/open/finish sequence. */
 export interface TtsTransport {
@@ -20,11 +17,7 @@ export interface TtsTransport {
 
 /** First-party stream-input format: PCM S16LE at the given sample rate. */
 export const TTS_OUTPUT_FORMAT = "pcm_24000";
-export const VOICE_AUDIO_FORMAT = {
-  encoding: "pcm_s16le",
-  sampleRate: 24000,
-  channels: 1,
-} as const;
+export { VOICE_AUDIO_FORMAT } from "./voice-providers.js";
 
 export function elevenLabsStreamUrl(voiceId: string): string {
   const voice = encodeURIComponent(voiceId);

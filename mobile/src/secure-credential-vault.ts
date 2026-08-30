@@ -6,10 +6,17 @@ import {
   refreshGithubCredential,
   serializeGithubCredential,
 } from "./github";
+import {
+  parseRailwayCredential,
+  RAILWAY_OAUTH_CLIENT_ID,
+  refreshRailwayCredential,
+  serializeRailwayCredential,
+} from "./providers/railway/oauth";
 
 export const credentialVault = createCredentialVault(SecureStore);
 
 const githubRefreshes = new Map<string, Promise<string>>();
+const railwayRefreshes = new Map<string, Promise<string>>();
 
 export async function githubAccessToken(credentialId: string): Promise<string> {
   const existing = githubRefreshes.get(credentialId);
@@ -46,6 +53,54 @@ export async function githubAccessToken(credentialId: string): Promise<string> {
   } finally {
     if (githubRefreshes.get(credentialId) === pending) {
       githubRefreshes.delete(credentialId);
+    }
+  }
+}
+
+export async function railwayAccessToken(
+  credentialId: string,
+): Promise<string> {
+  const existing = railwayRefreshes.get(credentialId);
+  if (existing) return existing;
+
+  const pending = (async () => {
+    const [entries, secret] = await Promise.all([
+      credentialVault.list(),
+      credentialVault.getSecret(credentialId),
+    ]);
+    const entry = entries.find((item) => item.id === credentialId);
+    if (
+      !entry ||
+      entry.kind !== "provider-oauth" ||
+      entry.providerId !== "railway" ||
+      !secret
+    ) {
+      throw new Error("Railway credential is unavailable");
+    }
+
+    const current = parseRailwayCredential(secret);
+    const refreshed = await refreshRailwayCredential(
+      RAILWAY_OAUTH_CLIENT_ID,
+      current,
+    );
+    const serialized = serializeRailwayCredential(refreshed);
+    if (serialized !== secret) {
+      await credentialVault.save({
+        id: entry.id,
+        kind: entry.kind,
+        providerId: "railway",
+        label: entry.label,
+        secret: serialized,
+      });
+    }
+    return refreshed.accessToken;
+  })();
+  railwayRefreshes.set(credentialId, pending);
+  try {
+    return await pending;
+  } finally {
+    if (railwayRefreshes.get(credentialId) === pending) {
+      railwayRefreshes.delete(credentialId);
     }
   }
 }

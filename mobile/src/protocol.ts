@@ -20,6 +20,11 @@ export interface Connection {
   userId: string;
 }
 
+export type GatewayHealth =
+  | { status: "reachable" }
+  | { status: "missing"; message: string }
+  | { status: "unreachable"; message: string };
+
 export type IncomingFrame =
   | { kind: "json"; text: string }
   | { kind: "audio"; buffer: ArrayBuffer }
@@ -57,6 +62,42 @@ export function connectionError(conn: Connection): string | null {
   if (!conn.token.trim()) return "Set a gateway token.";
   if (!conn.userId.trim()) return "Set a user id.";
   return null;
+}
+
+export function healthUrl(baseUrl: string): string {
+  return `${normalizeGatewayUrl(baseUrl)}/health`;
+}
+
+export async function probeGatewayHealth(
+  baseUrl: string,
+  request: typeof fetch = fetch,
+  timeoutMs = 8_000,
+): Promise<GatewayHealth> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await request(healthUrl(baseUrl), {
+      signal: controller.signal,
+    });
+    if (response.ok) return { status: "reachable" };
+    if (response.status === 404 || response.status === 410) {
+      return {
+        status: "missing",
+        message: "Deployment no longer exists.",
+      };
+    }
+    return {
+      status: "unreachable",
+      message: `Gateway unavailable (${response.status}).`,
+    };
+  } catch {
+    return {
+      status: "unreachable",
+      message: "Gateway is offline.",
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export function voiceUrl(

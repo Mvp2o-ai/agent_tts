@@ -39,7 +39,15 @@
         }
       ],
       "expo-asset",
-      "expo-secure-store"
+      "expo-secure-store",
+      "expo-web-browser",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "agent_tts scans setup QR codes for gateways you control.",
+          "barcodeScannerEnabled": true
+        }
+      ]
     ],
     "androidStatusBar": {
       "backgroundColor": "#0e1014",

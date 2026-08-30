@@ -8,8 +8,18 @@ import { HARNESS_ORDER } from "./config-schema.js";
 import { spawnCommandBox, type BoxConnection } from "./box-client.js";
 import { harnessEnv } from "./harness-env.js";
 import { AgentTurn, type VoiceSink } from "./agent-turn.js";
-import { openDeepgram, type SttStream } from "./deepgram.js";
-import { VOICE_AUDIO_FORMAT } from "./elevenlabs.js";
+import {
+  createSttAdapter,
+  createTtsAdapter,
+  listSttProviders,
+  listTtsProviders,
+  resolveVoiceProviderId,
+  STT_SAMPLE_RATE,
+  VOICE_AUDIO_FORMAT,
+  type SttAdapter,
+  type SttStream,
+  type TtsAdapter,
+} from "./voice-providers.js";
 import { SessionSink } from "./session-sink.js";
 import { VoiceInput } from "./voice-input.js";
 import { modelCatalogFor } from "./model-catalog.js";
@@ -18,7 +28,12 @@ import { modelCatalogFor } from "./model-catalog.js";
 export interface GatewayOptions {
   token: string;
   store: ConfigStore;
+  sttProviderId?: string;
+  ttsProviderId?: string;
+  voiceSecrets?: Record<string, string>;
+  /** @deprecated mapped into voiceSecrets for existing tests */
   deepgramKey?: string;
+  /** @deprecated mapped into voiceSecrets for existing tests */
   elevenKey?: string;
   /** Adapter argv, spawned as a child process per session. */
   boxCommand: string[];
@@ -41,6 +56,16 @@ interface VoiceAttachment {
   stt?: SttStream;
 }
 
+interface GatewayRuntime {
+  opts: GatewayOptions;
+  sttProviderId: string;
+  ttsProviderId: string;
+  voiceSecrets: Record<string, string>;
+  sttAdapter?: SttAdapter;
+  ttsAdapter?: TtsAdapter;
+  ttsResolutionAttempted: boolean;
+}
+
 export interface VoiceSession {
   userId: string;
   config: UserConfig;
@@ -50,12 +75,13 @@ export interface VoiceSession {
 }
 
 export function createGateway(opts: GatewayOptions) {
+  const runtime = resolveRuntime(opts);
   const generationId = opts.generationId ?? randomUUID();
   const sessions = new Map<string, VoiceSession>();
   const pendingSessions = new Map<string, Promise<VoiceSession>>();
 
   const server = createServer((req, res) => {
-    void handleHttp(req, res, opts, sessions);
+    void handleHttp(req, res, runtime, sessions);
   });
 
   const wss = new WebSocketServer({ server, path: "/v1/voice" });
@@ -63,7 +89,7 @@ export function createGateway(opts: GatewayOptions) {
     void handleVoice(
       ws,
       req,
-      opts,
+      runtime,
       sessions,
       pendingSessions,
       generationId,
@@ -73,16 +99,82 @@ export function createGateway(opts: GatewayOptions) {
   return { server, wss, sessions, generationId };
 }
 
+function resolveRuntime(opts: GatewayOptions): GatewayRuntime {
+  const voiceSecrets = {
+    ...(opts.deepgramKey !== undefined
+      ? { DEEPGRAM_API_KEY: opts.deepgramKey }
+      : {}),
+    ...(opts.elevenKey !== undefined
+      ? { ELEVENLABS_API_KEY: opts.elevenKey }
+      : {}),
+    ...(opts.voiceSecrets ?? {}),
+  };
+  return {
+    opts,
+    sttProviderId: resolveVoiceProviderId("stt", opts.sttProviderId),
+    ttsProviderId: resolveVoiceProviderId("tts", opts.ttsProviderId),
+    voiceSecrets,
+    ttsResolutionAttempted: false,
+  };
+}
+
+function getSttAdapter(runtime: GatewayRuntime): SttAdapter {
+  runtime.sttAdapter ??= createSttAdapter(
+    runtime.sttProviderId,
+    runtime.voiceSecrets,
+  );
+  return runtime.sttAdapter;
+}
+
+function getTtsAdapter(runtime: GatewayRuntime): TtsAdapter | undefined {
+  if (runtime.ttsResolutionAttempted) return runtime.ttsAdapter;
+  runtime.ttsResolutionAttempted = true;
+  try {
+    runtime.ttsAdapter = createTtsAdapter(
+      runtime.ttsProviderId,
+      runtime.voiceSecrets,
+    );
+  } catch {
+    // TTS is optional; text-only turns preserve the existing behavior.
+  }
+  return runtime.ttsAdapter;
+}
+
 async function handleHttp(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: GatewayOptions,
+  runtime: GatewayRuntime,
   sessions: Map<string, VoiceSession>,
 ): Promise<void> {
+  const { opts } = runtime;
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
 
   if (req.method === "GET" && url.pathname === "/health") {
     json(res, 200, { ok: true });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/v1/capabilities") {
+    if (!authorize(req, opts.token, url)) {
+      json(res, 401, { error: "unauthorized" });
+      return;
+    }
+    json(res, 200, {
+      stt: {
+        providerId: runtime.sttProviderId,
+        providers: listSttProviders(),
+      },
+      tts: {
+        providerId: runtime.ttsProviderId,
+        providers: listTtsProviders(),
+      },
+      audioFormat: VOICE_AUDIO_FORMAT,
+      capture: {
+        encoding: "pcm_s16le",
+        sampleRate: STT_SAMPLE_RATE,
+        channels: 1,
+      },
+    });
     return;
   }
 
@@ -161,7 +253,7 @@ async function handleHttp(
       json(res, 401, { error: "unauthorized" });
       return;
     }
-    await debugPrompt(req, res, opts);
+    await debugPrompt(req, res, runtime);
     return;
   }
 
@@ -171,8 +263,9 @@ async function handleHttp(
 async function debugPrompt(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: GatewayOptions,
+  runtime: GatewayRuntime,
 ): Promise<void> {
+  const { opts } = runtime;
   const body = (await readJson(req)) as { userId?: string; text?: string };
   const userId = body.userId || "default";
   const text = body.text?.trim();
@@ -219,7 +312,7 @@ async function debugPrompt(
     });
   };
 
-  turn = new AgentTurn(box, sink, config, opts.elevenKey, {
+  turn = new AgentTurn(box, sink, config, getTtsAdapter(runtime), {
     onIdle: endOnce,
     getConfig: () => opts.store.get(userId),
   });
@@ -230,11 +323,12 @@ async function debugPrompt(
 async function handleVoice(
   ws: WebSocket,
   req: IncomingMessage,
-  opts: GatewayOptions,
+  runtime: GatewayRuntime,
   sessions: Map<string, VoiceSession>,
   pendingSessions: Map<string, Promise<VoiceSession>>,
   generationId: string,
 ): Promise<void> {
+  const { opts } = runtime;
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   if (!authorize(req, opts.token, url)) {
     ws.close(4401, "unauthorized");
@@ -245,11 +339,14 @@ async function handleVoice(
   const mode = url.searchParams.get("mode") === "handsfree" ? "handsfree" : "ptt";
   const focused = url.searchParams.get("focused") !== "false";
   const afterEventId = parseEventCursor(url.searchParams.get("afterEventId"));
-  if (!opts.deepgramKey) {
+  let sttAdapter: SttAdapter;
+  try {
+    sttAdapter = getSttAdapter(runtime);
+  } catch (err) {
     ws.send(
       JSON.stringify({
         type: "error",
-        message: "DEEPGRAM_API_KEY is required for voice",
+        message: err instanceof Error ? err.message : String(err),
       }),
     );
     ws.close(4500, "no stt");
@@ -261,7 +358,7 @@ async function handleVoice(
   try {
     session = await getOrCreateVoiceSession(
       userId,
-      opts,
+      runtime,
       sessions,
       pendingSessions,
     );
@@ -345,8 +442,7 @@ async function handleVoice(
 
   const attachStt = () => {
     attachment.stt?.close();
-    attachment.stt = openDeepgram({
-      apiKey: opts.deepgramKey!,
+    attachment.stt = sttAdapter.open({
       onError: (err) =>
         session.sink.sendJson({ type: "error", message: err.message }),
       onEvent: (ev) => input.onStt(ev),
@@ -409,7 +505,7 @@ async function handleVoice(
     }
     if (msg.type === "ptt_end") {
       input.pttEnd();
-      // CloseStream so Deepgram flushes a late final; VoiceInput commits once.
+      // CloseStream so STT flushes a late final; VoiceInput commits once.
       attachment.stt?.finish();
     }
     if (msg.type === "abort") input.userAbort();
@@ -470,7 +566,7 @@ async function teardownUserSessions(
 
 async function getOrCreateVoiceSession(
   userId: string,
-  opts: GatewayOptions,
+  runtime: GatewayRuntime,
   sessions: Map<string, VoiceSession>,
   pendingSessions: Map<string, Promise<VoiceSession>>,
 ): Promise<VoiceSession> {
@@ -481,11 +577,18 @@ async function getOrCreateVoiceSession(
   if (pending) return pending;
 
   const creating = (async () => {
+    const { opts } = runtime;
     const config = await opts.store.get(userId);
     const sink = new SessionSink();
-    const turn = new AgentTurn(openBox(opts, config), sink, config, opts.elevenKey, {
+    const turn = new AgentTurn(
+      openBox(opts, config),
+      sink,
+      config,
+      getTtsAdapter(runtime),
+      {
       getConfig: () => opts.store.get(userId),
-    });
+      },
+    );
     const session = { userId, config, sink, turn };
     sessions.set(userId, session);
     return session;

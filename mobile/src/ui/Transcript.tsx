@@ -30,6 +30,9 @@ function laneFor(kind: SessionEvent["kind"]): Lane {
 
 export function Transcript({ events }: { events: SessionEvent[] }) {
   const listRef = useRef<FlatList<SessionEvent>>(null);
+  const visibleEvents = events.filter(
+    (event) => event.kind !== "ready" && event.kind !== "error",
+  );
 
   const renderItem: ListRenderItem<SessionEvent> = ({ item }) => {
     const lane = laneFor(item.kind);
@@ -90,9 +93,9 @@ export function Transcript({ events }: { events: SessionEvent[] }) {
       ref={listRef}
       style={styles.list}
       contentContainerStyle={
-        events.length === 0 ? styles.emptyContent : styles.listContent
+        visibleEvents.length === 0 ? styles.emptyContent : styles.listContent
       }
-      data={events}
+      data={visibleEvents}
       keyExtractor={(item) => String(item.id)}
       renderItem={renderItem}
       showsVerticalScrollIndicator={false}
