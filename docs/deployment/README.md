@@ -32,12 +32,19 @@ A host is compatible when it can do all of the following:
    image starts as root only to `chown /data`, then `exec`s as `agent`. Do
    **not** set the host to keep the main process as UID 0 to "fix" permissions
    (`RAILWAY_RUN_UID=0` or equivalent).
-10. **Secrets.** `GATEWAY_TOKEN`, optional `STT_PROVIDER` / `TTS_PROVIDER`, and
-    the secret environment variables required by those voice adapters are host
+10. **Secrets.** Optional `STT_PROVIDER` / `TTS_PROVIDER` and the secret
+    environment variables required by those voice adapters are host
     environment variables. Defaults are Deepgram and ElevenLabs
     (`DEEPGRAM_API_KEY`, `ELEVENLABS_API_KEY`). Model keys are pushed
     from the phone into SQLite. GitHub user tokens remain in the phone's secure
     store and are delivered only over the authenticated session socket.
+    `GATEWAY_TOKEN` is always required on the host, but **who creates it
+    depends on the path**:
+    - **Manual / Compose / CLI host:** you set a long random token in the
+      host environment (`.env` for Compose). Pairing must use that same value.
+    - **In-app provider launch:** the mobile app generates the token, stores
+      it in the device credential vault, and injects it into the new
+      container. Do not copy a local `.env` token into that flow.
 
 The agent profile and its host deployment persist until the operator removes
 them. A session is the disposable container run on that deployment; ending and
@@ -48,6 +55,11 @@ Local Compose remains the default development path: see the root
 [`README.md`](../../README.md).
 
 ## Pair an existing agent
+
+Use this path for a gateway **you** already deployed. The token on the phone
+must match the `GATEWAY_TOKEN` already in that host’s environment. In-app
+provider launch skips this step: the driver creates the token and the profile
+together.
 
 The app accepts the gateway URL and token manually, or scans a versioned setup
 link encoded as a QR code:

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
+import { applyCredentialPaste } from "../credential-paste";
 import { credentialVault } from "../secure-credential-vault";
 import { HARNESSES } from "../settings";
 import {
@@ -94,6 +95,41 @@ export function AppSettingsScreen({
       active = false;
     };
   }, [initialSttProviderId, initialTtsProviderId]);
+
+  const routeCredentialInput = (
+    value: string,
+    setBareValue: (value: string) => void,
+  ) => {
+    const result = applyCredentialPaste(value, {
+      sttProviderId,
+      ttsProviderId,
+    });
+    if (!result.detected) {
+      setBareValue(value);
+      return;
+    }
+
+    if (result.sttProviderId) setSttProviderId(result.sttProviderId);
+    if (result.ttsProviderId) setTtsProviderId(result.ttsProviderId);
+    setVoiceSecrets((current) => {
+      const next = { ...current };
+      for (const assignment of result.assignments) {
+        if (assignment.kind === "voice") {
+          next[assignment.fieldKey] = assignment.secret;
+        }
+      }
+      return next;
+    });
+    setModelKeys((current) => {
+      const next = { ...current };
+      for (const assignment of result.assignments) {
+        if (assignment.kind === "model") {
+          next[assignment.keyEnv] = assignment.secret;
+        }
+      }
+      return next;
+    });
+  };
 
   const save = async () => {
     setBusy(true);
@@ -203,10 +239,12 @@ export function AppSettingsScreen({
                     ] ?? ""
                   }
                   onChange={(value) =>
-                    setVoiceSecrets((current) => ({
-                      ...current,
-                      [voiceFieldKey(fieldProvider.id, field.env)]: value,
-                    }))
+                    routeCredentialInput(value, (bareValue) =>
+                      setVoiceSecrets((current) => ({
+                        ...current,
+                        [voiceFieldKey(fieldProvider.id, field.env)]: bareValue,
+                      })),
+                    )
                   }
                   autoCapitalize="none"
                   secure={field.secret}
@@ -226,10 +264,12 @@ export function AppSettingsScreen({
             label={`${harness.label} API key`}
             value={modelKeys[harness.keyEnv] ?? ""}
             onChange={(value) =>
-              setModelKeys((current) => ({
-                ...current,
-                [harness.keyEnv]: value,
-              }))
+              routeCredentialInput(value, (bareValue) =>
+                setModelKeys((current) => ({
+                  ...current,
+                  [harness.keyEnv]: bareValue,
+                })),
+              )
             }
             autoCapitalize="none"
             secure

@@ -76,6 +76,20 @@ docker compose up -d --build    # one agent container + SQLite volume
 
 The gateway listens on `:4100`. For phone access, expose it on your LAN or put TLS in front (Caddy/nginx) and use `https://`. Deploy additional copies of the same image (each with its own URL, token, and SQLite volume) to run more than one agent.
 
+### Who sets `GATEWAY_TOKEN`
+
+There are two connection paths, and they own the token differently:
+
+| Path | Who creates `GATEWAY_TOKEN` | What you do on the phone |
+|---|---|---|
+| **Host you start yourself** (Compose, VPS, Kubernetes, Railway CLI/dashboard) | You — put a long random value in that host’s environment (`.env` for Compose) | Pair with that same value: paste URL + token, or scan the setup QR |
+| **In-app provider launch** (e.g. **Launch on Railway**) | The app — it generates a token and injects it into the new container | Nothing for the token; the profile is added after health check |
+
+Do **not** copy `GATEWAY_TOKEN` from a local `.env` into an in-app launch, and
+do not expect App Settings to ask for it. App Settings holds voice and model
+keys used when the phone launches a container; gateway auth is either your
+host’s env (manual pair) or generated at launch time (provider driver).
+
 Provider launch is optional. The gateway runtime never calls a cloud API;
 isolated mobile provider drivers provision resources in the user's own account.
 Users can always connect a manually launched agent instead. Any container host

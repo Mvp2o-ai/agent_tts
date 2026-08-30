@@ -246,6 +246,23 @@ For voice-path changes:
    microphone routing, echo cancellation, background behavior, and barge-in
    feel require a physical device.
 
+When debugging a reported mobile UI symptom:
+
+1. Read the Metro terminal log before forming any hypothesis. A runtime
+   `SyntaxError` or `ReferenceError` there means the app is running stale or
+   half-refreshed JS; every observation against it is invalid. Cold-relaunch
+   (`xcrun simctl terminate booted <bundle-id>` then `launch`) and retest
+   before changing code.
+2. Fast Refresh is unreliable when a module's imports or hook usage change
+   shape. After any structural refactor, force a cold relaunch instead of
+   trusting the hot reload.
+3. The iOS Simulator pasteboard is separate from the macOS clipboard. When
+   testing paste, seed it explicitly
+   (`printf 'X=y' | xcrun simctl pbcopy booted`) so "paste is broken" is a
+   testable claim rather than an empty clipboard.
+4. Apply one suspect change at a time; if it does not visibly fix the
+   symptom, revert it before trying the next hypothesis.
+
 ## Implementation rules
 
 - Fix violated contracts at their source; do not hide failures with retries,

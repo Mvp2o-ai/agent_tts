@@ -122,6 +122,13 @@ describe("Railway provisioning driver", () => {
                 data: { serviceInstance: { source: null } },
               });
             case "AgentTtsServiceConnect":
+              // serviceConnect takes ServiceConnectInput; ServiceSourceInput is
+              // only valid on create/update `source` fields.
+              assert.match(payload.query, /\$input:\s*ServiceConnectInput!/);
+              assert.doesNotMatch(
+                payload.query,
+                /\$input:\s*ServiceSourceInput!/,
+              );
               assert.deepEqual(payload.variables, {
                 serviceId: "service-1",
                 input: {

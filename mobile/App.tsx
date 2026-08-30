@@ -124,7 +124,6 @@ export default function App() {
   >([]);
   const [githubSearch, setGithubSearch] = useState("");
   const [githubBusy, setGithubBusy] = useState(false);
-  const [modelCredentialLabel, setModelCredentialLabel] = useState("");
   const [legacySecretsMigrated, setLegacySecretsMigrated] = useState(false);
   const [modelCatalog, setModelCatalog] = useState<ModelCatalog | null>(null);
   const [agentSetupScreen, setAgentSetupScreen] =
@@ -675,23 +674,22 @@ export default function App() {
     });
   }
 
-  async function saveModelCredential() {
-    const secret = settings.modelKeys[selectedHarness.keyEnv] ?? "";
-    if (!secret.trim()) {
-      setConfigOk(false);
-      setConfigMsg("Enter a model key before saving it to the library.");
-      return;
-    }
-    const entry = await credentialVault.save({
-      kind: "model-key",
-      keyEnv: selectedHarness.keyEnv,
-      label: modelCredentialLabel,
-      secret,
-    });
-    await selectModelCredential(entry);
-    setModelCredentialLabel("");
-    refreshCredentials();
-  }
+  useEffect(() => {
+    if (agent.modelCredentialIds?.[selectedHarness.keyEnv]) return;
+    const latest = [...credentials]
+      .reverse()
+      .find(
+        (entry) =>
+          entry.kind === "model-key" &&
+          entry.keyEnv === selectedHarness.keyEnv,
+      );
+    if (!latest) return;
+    void selectModelCredential(latest);
+  }, [
+    agent.modelCredentialIds,
+    credentials,
+    selectedHarness.keyEnv,
+  ]);
 
   async function removeCredential(entry: CredentialEntry) {
     await credentialVault.remove(entry.id);
@@ -1087,46 +1085,22 @@ export default function App() {
           onSelectEffort={selectEffortOverride}
         />
       ) : null}
-      <Card>
-        <Field
-          label={`${selectedHarness.label} API key`}
-          value={settings.modelKeys[selectedHarness.keyEnv] ?? ""}
-          onChange={(v) =>
-            setSettings((prev) => ({
-              ...prev,
-              modelKeys: {
-                ...prev.modelKeys,
-                [selectedHarness.keyEnv]: v,
-              },
-            }))
-          }
-          secure
-          autoCapitalize="none"
-          hint={`Used by ${selectedHarness.label} in this agent's session.`}
-        />
-        <Field
-          label="Saved key name"
-          value={modelCredentialLabel}
-          onChange={setModelCredentialLabel}
-          placeholder={`${selectedHarness.label} — personal`}
-        />
-        <Button
-          tone="neutral"
-          label="Save key on this device"
-          onPress={() => void saveModelCredential()}
-        />
-        <CredentialPicker
-          entries={credentials.filter(
-            (entry) =>
-              entry.kind === "model-key" &&
-              entry.keyEnv === selectedHarness.keyEnv,
-          )}
-          selectedId={agent.modelCredentialIds?.[selectedHarness.keyEnv]}
-          onSelect={(entry) => void selectModelCredential(entry)}
-          onRemove={(entry) => void removeCredential(entry)}
-          emptyLabel={`No saved ${selectedHarness.label} keys yet.`}
-        />
-      </Card>
+      {credentials.every(
+        (entry) =>
+          entry.kind !== "model-key" ||
+          entry.keyEnv !== selectedHarness.keyEnv,
+      ) ? (
+        <Card>
+          <Text style={styles.note}>
+            {`${selectedHarness.label} needs an API key from App Settings.`}
+          </Text>
+          <Button
+            tone="neutral"
+            label="Open App Settings"
+            onPress={() => setShowAppSettings(true)}
+          />
+        </Card>
+      ) : null}
 
       <SectionLabel icon={<LinkIcon size={13} color={color.textMuted} />}>
         Code and repositories
@@ -1519,7 +1493,7 @@ function CredentialPicker({
   entries: CredentialEntry[];
   selectedId?: string;
   onSelect: (entry: CredentialEntry) => void;
-  onRemove: (entry: CredentialEntry) => void;
+  onRemove?: (entry: CredentialEntry) => void;
   emptyLabel: string;
 }) {
   if (entries.length === 0) {
@@ -1551,15 +1525,17 @@ function CredentialPicker({
               {entry.label}
             </Text>
             {selected ? <CheckIcon size={14} color={color.accent} /> : null}
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={`Delete ${entry.label}`}
-              hitSlop={8}
-              onPress={() => onRemove(entry)}
-              style={styles.agentDelete}
-            >
-              <TrashIcon size={15} color={color.danger} />
-            </Pressable>
+            {onRemove ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Delete ${entry.label}`}
+                hitSlop={8}
+                onPress={() => onRemove(entry)}
+                style={styles.agentDelete}
+              >
+                <TrashIcon size={15} color={color.danger} />
+              </Pressable>
+            ) : null}
           </Pressable>
         );
       })}

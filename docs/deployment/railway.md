@@ -18,8 +18,10 @@ either path belongs to the user. This public implementation contains no
 
 **Launch on Railway** is the primary path for users who want Railway hosting.
 The app authorizes Railway with OAuth, creates one isolated agent deployment
-(project, service, volume, domain, and gateway token), and waits for its health
-check before adding it to the agent list.
+(project, service, volume, domain, and a freshly generated `GATEWAY_TOKEN`),
+and waits for its health check before adding it to the agent list. That token
+is created on the phone and injected into Railway variables — it is **not**
+read from a local `.env`, and you do not paste it during setup.
 
 Railway receives the provider-neutral runtime image selected when the mobile
 app was built. Official builds use the public upstream image; a fork can set
@@ -86,7 +88,8 @@ Hobby is required for **Always** restart. That policy is what makes
 3. Values for `GATEWAY_TOKEN` and the selected voice providers (defaults:
    `DEEPGRAM_API_KEY` and `ELEVENLABS_API_KEY`; optional `STT_PROVIDER` /
    `TTS_PROVIDER`). Generate a long random `GATEWAY_TOKEN`; do not reuse a
-   password.
+   password. This applies to the **manual** CLI/dashboard path below. In-app
+   launch generates its own token (see above).
 
 Put secrets in Railway service variables, not in git. `preserve()` in IaC
 means “do not delete whatever is already set in Railway.”

@@ -1,18 +1,8 @@
 import type { ReactNode } from "react";
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Animated,
   Easing,
-  Keyboard,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -25,15 +15,10 @@ import {
 import { AlertIcon, CheckIcon, EyeIcon, EyeOffIcon } from "./icons";
 import { color, font, monoFamily, radius, shadow, space } from "./theme";
 
-const FocusedFieldContext = createContext<{
-  register: (node: View | null) => void;
-  unregister: (node: View) => void;
-} | null>(null);
-
 /**
- * Form scroller that keeps the focused field above the keyboard. A plain
- * ScrollView cannot lift the last input: there is not enough content below it,
- * and nothing asks the scroller to move when the keyboard covers the field.
+ * Form scroller. `automaticallyAdjustKeyboardInsets` lets iOS grow the
+ * content inset under the keyboard and keep the focused field visible —
+ * no keyboard listeners, no programmatic scrolling, no gesture overrides.
  */
 export function KeyboardAwareScrollView({
   children,
@@ -44,117 +29,15 @@ export function KeyboardAwareScrollView({
   contentContainerStyle?: StyleProp<ViewStyle>;
   style?: StyleProp<ViewStyle>;
 }) {
-  const scrollRef = useRef<ScrollView>(null);
-  const focusedRef = useRef<View | null>(null);
-  const offsetRef = useRef(0);
-  const keyboardHeightRef = useRef(0);
-  const pendingRevealTop = useRef<number | null>(null);
-  const [keyboardHeight, setKeyboardHeight] = useState(0);
-
-  const reveal = useCallback((keyboardTop: number) => {
-    const field = focusedRef.current;
-    const scroll = scrollRef.current;
-    if (!field || !scroll) {
-      return;
-    }
-    field.measureInWindow((_x, y, _w, h) => {
-      const overlap = y + h + space.md - keyboardTop;
-      if (overlap <= 0) {
-        return;
-      }
-      scroll.scrollTo({
-        y: Math.max(0, offsetRef.current + overlap),
-        animated: true,
-      });
-    });
-  }, []);
-
-  useEffect(() => {
-    const onShow = (event: {
-      endCoordinates: { height: number; screenY: number };
-    }) => {
-      const nextHeight = event.endCoordinates.height;
-      const keyboardTop = event.endCoordinates.screenY;
-      if (nextHeight <= 0) {
-        return;
-      }
-      if (nextHeight === keyboardHeightRef.current) {
-        reveal(keyboardTop);
-        return;
-      }
-      keyboardHeightRef.current = nextHeight;
-      pendingRevealTop.current = keyboardTop;
-      setKeyboardHeight(nextHeight);
-    };
-    const onHide = () => {
-      keyboardHeightRef.current = 0;
-      pendingRevealTop.current = null;
-      setKeyboardHeight(0);
-    };
-    const show = Keyboard.addListener(
-      Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow",
-      onShow,
-    );
-    const hide = Keyboard.addListener(
-      Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide",
-      onHide,
-    );
-    return () => {
-      show.remove();
-      hide.remove();
-    };
-  }, [reveal]);
-
-  const register = useCallback(
-    (node: View | null) => {
-      focusedRef.current = node;
-      if (!node) {
-        return;
-      }
-      const metrics = Keyboard.metrics();
-      if (metrics && metrics.height > 0) {
-        requestAnimationFrame(() => reveal(metrics.screenY));
-      }
-    },
-    [reveal],
-  );
-
-  const unregister = useCallback((node: View) => {
-    if (focusedRef.current === node) {
-      focusedRef.current = null;
-    }
-  }, []);
-
-  const context = useMemo(
-    () => ({ register, unregister }),
-    [register, unregister],
-  );
-
   return (
-    <FocusedFieldContext.Provider value={context}>
-      <ScrollView
-        ref={scrollRef}
-        style={style}
-        contentContainerStyle={contentContainerStyle}
-        keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="interactive"
-        onScroll={(event) => {
-          offsetRef.current = event.nativeEvent.contentOffset.y;
-        }}
-        onContentSizeChange={() => {
-          const keyboardTop = pendingRevealTop.current;
-          if (keyboardTop == null) {
-            return;
-          }
-          pendingRevealTop.current = null;
-          reveal(keyboardTop);
-        }}
-        scrollEventThrottle={16}
-      >
-        {children}
-        {keyboardHeight > 0 ? <View style={{ height: keyboardHeight }} /> : null}
-      </ScrollView>
-    </FocusedFieldContext.Provider>
+    <ScrollView
+      style={style}
+      contentContainerStyle={contentContainerStyle}
+      keyboardShouldPersistTaps="handled"
+      automaticallyAdjustKeyboardInsets
+    >
+      {children}
+    </ScrollView>
   );
 }
 
@@ -418,30 +301,20 @@ export function Field({
   placeholder?: string;
   hint?: string;
 }) {
-  const focusedField = useContext(FocusedFieldContext);
-  const wrapRef = useRef<View>(null);
   const [focused, setFocused] = useState(false);
   const [revealed, setRevealed] = useState(false);
   const hidden = Boolean(secure) && !revealed;
 
   return (
-    <View ref={wrapRef} style={styles.field}>
+    <View style={styles.field}>
       <Text style={styles.fieldLabel}>{label}</Text>
       <View style={[styles.inputWrap, focused && styles.inputWrapFocused]}>
         <TextInput
           style={[styles.input, (mono || secure) && styles.inputMono]}
           value={value}
           onChangeText={onChange}
-          onFocus={() => {
-            setFocused(true);
-            focusedField?.register(wrapRef.current);
-          }}
-          onBlur={() => {
-            setFocused(false);
-            if (wrapRef.current) {
-              focusedField?.unregister(wrapRef.current);
-            }
-          }}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
           secureTextEntry={hidden}
           autoCapitalize={autoCapitalize ?? "sentences"}
           autoCorrect={false}

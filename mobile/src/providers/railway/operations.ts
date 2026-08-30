@@ -264,7 +264,7 @@ export async function connectRailwayServiceImage(
     accessToken,
     `mutation AgentTtsServiceConnect(
       $serviceId: String!
-      $input: ServiceSourceInput!
+      $input: ServiceConnectInput!
     ) {
       serviceConnect(id: $serviceId, input: $input) { id }
     }`,

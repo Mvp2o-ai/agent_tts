@@ -127,12 +127,13 @@ export function RailwayAgentScreen({
                 One more thing before launch
               </Text>
               <Text style={styles.connectionDetail}>
-                Your agent needs a voice. Add your{" "}
-                {missingVoiceCredentials.join(" and ")} in Settings — once
-                saved on this phone, every future launch reuses them.
+                Open App credentials to save voice keys (
+                {missingVoiceCredentials.join(" and ")}) and any model API
+                keys you will use. Once saved on this phone, every future
+                launch reuses them.
               </Text>
               <Button
-                label="Add voice keys"
+                label="Open app credentials"
                 onPress={onOpenAppSettings}
               />
             </Card>
