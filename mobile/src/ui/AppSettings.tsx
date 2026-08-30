@@ -153,45 +153,70 @@ export function AppSettingsScreen({
     >
       <Text style={styles.sectionLabel}>VOICE SERVICES</Text>
       <Card style={styles.formCard}>
-        <Text style={styles.pickerLabel}>Speech-to-text</Text>
-        <Select
-          options={STT_PROVIDERS.map((provider) => ({
-            value: provider.id,
-            label: provider.label,
-          }))}
-          value={sttProviderId}
-          onChange={setSttProviderId}
-          disabled={busy}
-        />
-        <Text style={styles.pickerLabel}>Text-to-speech</Text>
-        <Select
-          options={TTS_PROVIDERS.map((provider) => ({
-            value: provider.id,
-            label: provider.label,
-          }))}
-          value={ttsProviderId}
-          onChange={setTtsProviderId}
-          disabled={busy}
-        />
-        {selectedVoiceFields(sttProviderId, ttsProviderId).map(
-          ({ provider, field }) => (
-            <Field
-              key={voiceFieldKey(provider.id, field.env)}
-              label={field.label}
-              value={voiceSecrets[voiceFieldKey(provider.id, field.env)] ?? ""}
-              onChange={(value) =>
-                setVoiceSecrets((current) => ({
-                  ...current,
-                  [voiceFieldKey(provider.id, field.env)]: value,
-                }))
-              }
-              autoCapitalize="none"
-              secure={field.secret}
-              mono={field.secret}
-              hint={field.hint}
-            />
-          ),
-        )}
+        {[
+          {
+            role: "stt" as const,
+            label: "Speech-to-text",
+            providerId: sttProviderId,
+            providers: STT_PROVIDERS,
+            onChange: setSttProviderId,
+          },
+          {
+            role: "tts" as const,
+            label: "Text-to-speech",
+            providerId: ttsProviderId,
+            providers: TTS_PROVIDERS,
+            onChange: setTtsProviderId,
+          },
+        ].map((service) => {
+          const provider = getVoiceProvider(service.role, service.providerId);
+          const fields = selectedVoiceFields(
+            sttProviderId,
+            ttsProviderId,
+          ).filter((entry) => entry.provider.id === provider.id);
+          return (
+            <View key={service.role} style={styles.voiceService}>
+              <View style={styles.voiceServiceHeader}>
+                <View style={styles.voiceServiceTitle}>
+                  <Text style={styles.pickerLabel}>{service.label}</Text>
+                  <Text style={styles.providerHint}>
+                    {provider.label} credentials
+                  </Text>
+                </View>
+                <Select
+                  options={service.providers.map((entry) => ({
+                    value: entry.id,
+                    label: entry.label,
+                  }))}
+                  value={service.providerId}
+                  onChange={service.onChange}
+                  disabled={busy}
+                />
+              </View>
+              {fields.map(({ provider: fieldProvider, field }) => (
+                <Field
+                  key={voiceFieldKey(fieldProvider.id, field.env)}
+                  label={field.label}
+                  value={
+                    voiceSecrets[
+                      voiceFieldKey(fieldProvider.id, field.env)
+                    ] ?? ""
+                  }
+                  onChange={(value) =>
+                    setVoiceSecrets((current) => ({
+                      ...current,
+                      [voiceFieldKey(fieldProvider.id, field.env)]: value,
+                    }))
+                  }
+                  autoCapitalize="none"
+                  secure={field.secret}
+                  mono={field.secret}
+                  hint={field.hint}
+                />
+              ))}
+            </View>
+          );
+        })}
       </Card>
       <Text style={styles.sectionLabel}>AGENT RUNTIMES</Text>
       <Card style={styles.formCard}>
@@ -269,6 +294,27 @@ const styles = StyleSheet.create({
     color: color.textDim,
     fontSize: font.caption,
     fontWeight: "700",
+  },
+  voiceService: {
+    padding: space.md,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: color.border,
+    backgroundColor: color.bgElevated,
+  },
+  voiceServiceHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.md,
+    marginBottom: space.md,
+  },
+  voiceServiceTitle: {
+    flex: 1,
+    gap: 4,
+  },
+  providerHint: {
+    color: color.textDim,
+    fontSize: font.caption,
   },
   sectionLabel: {
     color: color.textDim,
