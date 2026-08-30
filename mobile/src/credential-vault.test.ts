@@ -177,4 +177,30 @@ describe("credential vault", () => {
     assert.deepEqual(await vault.list(), []);
     assert.equal(await vault.getSecret(saved.id), null);
   });
+
+  it("keeps concurrent credential saves in the shared index", async () => {
+    const vault = createCredentialVault(memorySecureStore());
+    const saved = await Promise.all(
+      ["ANTHROPIC_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY"].map(
+        (keyEnv) =>
+          vault.save({
+            kind: "model-key",
+            keyEnv,
+            label: keyEnv,
+            secret: `${keyEnv}-secret`,
+          }),
+      ),
+    );
+
+    assert.deepEqual(
+      (await vault.list()).map((entry) => entry.keyEnv),
+      ["ANTHROPIC_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY"],
+    );
+    for (const entry of saved) {
+      assert.equal(
+        await vault.getSecret(entry.id),
+        `${entry.keyEnv}-secret`,
+      );
+    }
+  });
 });

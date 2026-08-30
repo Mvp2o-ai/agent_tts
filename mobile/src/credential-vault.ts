@@ -41,6 +41,18 @@ export function createCredentialVault(store: SecureCredentialStore) {
   const writeIndex = (entries: CredentialEntry[]) =>
     store.setItemAsync(INDEX_KEY, JSON.stringify(entries));
 
+  let indexMutationQueue: Promise<void> = Promise.resolve();
+  const withIndexMutation = async <T>(
+    mutation: () => Promise<T>,
+  ): Promise<T> => {
+    const next = indexMutationQueue.then(mutation, mutation);
+    indexMutationQueue = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  };
+
   return {
     list: readIndex,
     async getSecret(id: string): Promise<string | null> {
@@ -64,16 +76,20 @@ export function createCredentialVault(store: SecureCredentialStore) {
         ...(keyEnv ? { keyEnv } : {}),
         ...(providerId ? { providerId } : {}),
       };
-      await store.setItemAsync(secretKey(id), input.secret);
-      const entries = await readIndex();
-      const next = [...entries.filter((item) => item.id !== id), entry];
-      await writeIndex(next);
-      return entry;
+      return withIndexMutation(async () => {
+        await store.setItemAsync(secretKey(id), input.secret);
+        const entries = await readIndex();
+        const next = [...entries.filter((item) => item.id !== id), entry];
+        await writeIndex(next);
+        return entry;
+      });
     },
     async remove(id: string): Promise<void> {
-      await store.deleteItemAsync(secretKey(id));
-      const entries = await readIndex();
-      await writeIndex(entries.filter((entry) => entry.id !== id));
+      await withIndexMutation(async () => {
+        await store.deleteItemAsync(secretKey(id));
+        const entries = await readIndex();
+        await writeIndex(entries.filter((entry) => entry.id !== id));
+      });
     },
   };
 }
