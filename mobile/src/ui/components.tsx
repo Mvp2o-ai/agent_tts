@@ -340,6 +340,65 @@ export function Segmented<T extends string>({
   );
 }
 
+export function Select<T extends string>({
+  options,
+  value,
+  onChange,
+  disabled,
+}: {
+  options: { value: T; label: string }[];
+  value: T;
+  onChange: (next: T) => void;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const selected = options.find((option) => option.value === value);
+
+  return (
+    <View style={styles.select}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open, disabled: Boolean(disabled) }}
+        disabled={disabled}
+        onPress={() => setOpen((current) => !current)}
+        style={styles.selectTrigger}
+      >
+        <Text style={styles.selectValue}>{selected?.label ?? value}</Text>
+        <Text style={styles.selectChevron}>{open ? "⌃" : "⌄"}</Text>
+      </Pressable>
+      {open ? (
+        <View style={styles.selectMenu}>
+          {options.map((option) => {
+            const active = option.value === value;
+            return (
+              <Pressable
+                key={option.value}
+                accessibilityRole="radio"
+                accessibilityState={{ selected: active }}
+                onPress={() => {
+                  onChange(option.value);
+                  setOpen(false);
+                }}
+                style={[styles.selectOption, active && styles.selectOptionActive]}
+              >
+                <Text
+                  style={[
+                    styles.selectOptionLabel,
+                    active && styles.selectOptionLabelActive,
+                  ]}
+                >
+                  {option.label}
+                </Text>
+                {active ? <Text style={styles.selectCheck}>✓</Text> : null}
+              </Pressable>
+            );
+          })}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 export function Field({
   label,
   value,
@@ -556,6 +615,62 @@ const styles = StyleSheet.create({
   },
   segmentedDisabled: {
     opacity: 0.5,
+  },
+  select: {
+    marginBottom: space.sm,
+  },
+  selectTrigger: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    minHeight: 48,
+    paddingHorizontal: space.md,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: color.border,
+    backgroundColor: color.surfaceRaised,
+  },
+  selectValue: {
+    color: color.text,
+    fontSize: font.label,
+    fontWeight: "600",
+  },
+  selectChevron: {
+    color: color.textMuted,
+    fontSize: font.title,
+    lineHeight: 20,
+  },
+  selectMenu: {
+    marginTop: 4,
+    padding: 4,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: color.borderStrong,
+    backgroundColor: color.bgElevated,
+  },
+  selectOption: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    minHeight: 44,
+    paddingHorizontal: space.md,
+    borderRadius: radius.sm,
+  },
+  selectOptionActive: {
+    backgroundColor: color.accentTint,
+  },
+  selectOptionLabel: {
+    color: color.textMuted,
+    fontSize: font.label,
+    fontWeight: "600",
+  },
+  selectOptionLabelActive: {
+    color: color.text,
+  },
+  selectCheck: {
+    color: color.accent,
+    fontSize: font.body,
+    fontWeight: "800",
   },
   segment: {
     flex: 1,

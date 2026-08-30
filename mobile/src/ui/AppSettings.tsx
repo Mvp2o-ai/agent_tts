@@ -11,7 +11,7 @@ import {
   TTS_PROVIDERS,
 } from "../voice-providers";
 import { SetupShell } from "./AgentSetup";
-import { Button, Card, Field, Segmented } from "./components";
+import { Button, Card, Field, Select } from "./components";
 import { color, font, radius, space } from "./theme";
 
 export function AppSettingsScreen({
@@ -154,7 +154,7 @@ export function AppSettingsScreen({
       <Text style={styles.sectionLabel}>VOICE SERVICES</Text>
       <Card style={styles.formCard}>
         <Text style={styles.pickerLabel}>Speech-to-text</Text>
-        <Segmented
+        <Select
           options={STT_PROVIDERS.map((provider) => ({
             value: provider.id,
             label: provider.label,
@@ -164,7 +164,7 @@ export function AppSettingsScreen({
           disabled={busy}
         />
         <Text style={styles.pickerLabel}>Text-to-speech</Text>
-        <Segmented
+        <Select
           options={TTS_PROVIDERS.map((provider) => ({
             value: provider.id,
             label: provider.label,
