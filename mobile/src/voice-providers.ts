@@ -26,7 +26,7 @@ export const STT_PROVIDERS: readonly VoiceProviderManifest[] = [
     credentialFields: [
       {
         id: "apiKey",
-        label: "Deepgram API key",
+        label: "API Key",
         hint: "Speech-to-text for every agent launched from this phone.",
         secret: true,
         env: "DEEPGRAM_API_KEY",
@@ -43,7 +43,7 @@ export const TTS_PROVIDERS: readonly VoiceProviderManifest[] = [
     credentialFields: [
       {
         id: "apiKey",
-        label: "ElevenLabs API key",
+        label: "API Key",
         hint: "Text-to-speech for every agent launched from this phone.",
         secret: true,
         env: "ELEVENLABS_API_KEY",

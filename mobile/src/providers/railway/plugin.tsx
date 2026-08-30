@@ -64,9 +64,10 @@ export function useRailwayProvider(
         ] as const
       ).flatMap(([role, providerId]) => {
         if (findVoiceCredential(context.credentials, providerId)) return [];
-        return getVoiceProvider(role, providerId)
-          .credentialFields.filter((field) => field.secret)
-          .map((field) => field.label);
+        const provider = getVoiceProvider(role, providerId);
+        return provider.credentialFields.some((field) => field.secret)
+          ? [provider.label]
+          : [];
       });
       return (
         <RailwayAgentScreen
