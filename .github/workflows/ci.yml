@@ -2,20 +2,262 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main]
+    tags: ["v*.*.*"]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      publish_image:
+        description: Publish the runtime image after checks pass
+        type: boolean
+        default: false
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
 
 jobs:
-  build:
+  runtime:
+    name: Runtime (Node ${{ matrix.node }})
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  mobile:
+    name: Mobile
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: npm
-      - run: npm install
-      - run: npm run lint --if-present
+          cache-dependency-path: mobile/package-lock.json
+      - run: npm ci
+      - run: npm run lint
       - run: npm run typecheck
-      - run: npm run test
-      - run: npm run build
+      - run: npm test
+      - run: npm run config:check
+
+  android:
+    name: Android native
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+      - run: npm ci
+      - name: Generate the Android project
+        run: npx expo prebuild --platform android --no-install
+      - name: Compile and run Android unit tests
+        run: >-
+          ./android/gradlew
+          :app:assembleDebug
+          :voice-audio:testDebugUnitTest
+          --no-daemon
+
+  changes:
+    name: Change scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      image: ${{ steps.filter.outputs.image }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: filter
+        name: Detect runtime image changes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+          PUSH_SHA: ${{ github.sha }}
+          MANUAL_PUBLISH: ${{ inputs.publish_image || false }}
+        run: |
+          image=false
+          if [[ "$MANUAL_PUBLISH" == "true" || "$REF" == refs/tags/v* ]]; then
+            image=true
+          elif [[ "$EVENT_NAME" == "pull_request" ]]; then
+            git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- \
+              agentbox gateway package.json package-lock.json \
+              .dockerignore .github/workflows/ci.yml || image=true
+          elif [[ -n "$BEFORE_SHA" &&
+                  "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ]]; then
+            git diff --quiet "$BEFORE_SHA" "$PUSH_SHA" -- \
+              agentbox gateway package.json package-lock.json \
+              .dockerignore .github/workflows/ci.yml || image=true
+          fi
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+
+  image:
+    name: Runtime image
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.image == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: gateway/Dockerfile
+          push: false
+          load: true
+          tags: agent_tts:ci
+          cache-from: type=gha
+      - name: Smoke-test the built image
+        run: |
+          set -euo pipefail
+          container=agent-tts-ci
+          trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
+          docker run -d --name "$container" \
+            -e GATEWAY_TOKEN=ci-gateway-token-not-a-secret \
+            -e CONFIG_DB=memory \
+            -e "AGENTBOX_COMMAND=node /app/gateway/dist/testing/fake-box.js" \
+            -p 127.0.0.1:4100:4100 \
+            agent_tts:ci
+          for _ in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:4100/health >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:4100/health >/dev/null
+          pid1_user=$(docker top "$container" -eo user,pid,ppid,comm |
+            awk 'NR == 2 { print $1 }')
+          [[ "$pid1_user" != "root" && "$pid1_user" != "0" ]]
+          response=$(curl --fail --silent \
+            -H "Authorization: Bearer ci-gateway-token-not-a-secret" \
+            -H "Content-Type: application/json" \
+            -d '{"text":"image smoke test"}' \
+            http://127.0.0.1:4100/v1/debug/prompt)
+          [[ "$response" == *'"type":"done"'* ]]
+
+  ci:
+    name: All checks
+    if: always()
+    needs: [runtime, mobile, android, changes, image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require all applicable checks
+        env:
+          RUNTIME_RESULT: ${{ needs.runtime.result }}
+          MOBILE_RESULT: ${{ needs.mobile.result }}
+          ANDROID_RESULT: ${{ needs.android.result }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          IMAGE_RESULT: ${{ needs.image.result }}
+        run: |
+          set -euo pipefail
+          test "$RUNTIME_RESULT" = "success"
+          test "$MOBILE_RESULT" = "success"
+          test "$ANDROID_RESULT" = "success"
+          test "$CHANGES_RESULT" = "success"
+          [[ "$IMAGE_RESULT" == "success" || "$IMAGE_RESULT" == "skipped" ]]
+
+  publish:
+    name: Publish runtime image
+    needs: [ci, changes]
+    if: >-
+      (github.event_name == 'push' ||
+       (github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/main' &&
+        inputs.publish_image)) &&
+      needs.ci.result == 'success' &&
+      needs.changes.outputs.image == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Normalize image name
+        id: image-name
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: metadata
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ steps.image-name.outputs.name }}
+          tags: |
+            type=raw,value=main,enable={{is_default_branch}}
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha
+      - id: publish-image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: gateway/Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
+      - name: Record immutable image digest
+        env:
+          IMAGE_NAME: ${{ steps.image-name.outputs.name }}
+          IMAGE_DIGEST: ${{ steps.publish-image.outputs.digest }}
+        run: |
+          echo "### Runtime image" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`$IMAGE_NAME@$IMAGE_DIGEST\`" >> "$GITHUB_STEP_SUMMARY"

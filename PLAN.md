@@ -15,7 +15,7 @@ the same image; no Docker socket, no nested containers, no provider API.
 
 ```
 mobile (Expo RN, native audio — the ONLY client; there is no web UI)
-   │  WebSocket: PCM 16 kHz up / MP3 + events down
+   │  WebSocket: PCM 16 kHz up / PCM 24 kHz + events down
    ▼
 agent container (one per agent identity; operator deploys it anywhere)
    ├─ gateway (Node/TS, headless API)
@@ -81,7 +81,7 @@ both run Claude.
 
 ## Milestones
 
-1. **M0 — Scaffold + CI** (this commit): repo layout, workspaces, lint/test/build CI, agentbox image build workflow.
+1. **M0 — Scaffold + CI:** repo layout, workspaces, lint/test/build CI, and runtime image validation/publication.
 2. **M1 — Box protocol:** agentbox image, claude-code adapter, gateway can run a text prompt end-to-end (no audio).
 3. **M2 — Voice loop:** mobile PTT → Deepgram → prompt → harness → ElevenLabs → playback.
 4. **M3 — Interaction semantics:** barge-in, prompt queue, stop word, hands-free VAD.
@@ -92,10 +92,8 @@ both run Claude.
 
 ## CI/CD (GitHub Actions)
 
-- `ci.yml` — on PR/push: install, lint, typecheck, test across workspaces.
-- `agentbox.yml` — on `agentbox/**` change to main: build + push image to GHCR.
-- `deploy-gateway.yml` — on main: build the gateway so the artifact is proven. Deploy is the operator's job (this is not a hosted product).
-- Mobile builds via EAS at M6 (not in CI initially).
+- `ci.yml` — on PR/push to `main`: runtime and mobile lint/typecheck/test/build, plus a no-push image build when image inputs change. Merge requires the `All checks` job. Image-changing commits and version tags publish to GHCR only after that aggregate passes.
+- Device/EAS builds stay out of GitHub Actions (M6 / operator Expo account).
 
 ## Open questions to align on
 

@@ -2,11 +2,15 @@
   "name": "@agent_tts/mobile",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=22"
+  },
   "main": "expo/AppEntry",
   "scripts": {
     "start": "expo start --dev-client",
     "android": "expo run:android",
     "ios": "expo run:ios",
+    "lint": "eslint App.tsx src packages/voice-audio/src --max-warnings 0",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test src/*.test.ts",
     "config:check": "expo config --type public",
@@ -32,7 +36,14 @@
   },
   "devDependencies": {
     "@types/react": "~19.2.4",
+    "eslint": "^9.39.5",
+    "eslint-config-expo": "^57.0.2",
     "tsx": "^4.19.0",
     "typescript": "~6.0.3"
+  },
+  "overrides": {
+    "xcode": {
+      "uuid": "14.0.1"
+    }
   }
 }

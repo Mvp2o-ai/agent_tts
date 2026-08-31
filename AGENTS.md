@@ -78,6 +78,7 @@ From the repository root:
 
 ```bash
 npm ci
+npm run lint
 npm run typecheck
 npm test
 npm run build
@@ -89,8 +90,10 @@ Set up the mobile workspace separately:
 ```bash
 cd mobile
 npm ci
+npm run lint
 npm run typecheck
 npm test
+npm run config:check
 ```
 
 The app contains a local Expo native module and does not work in Expo Go.
@@ -214,14 +217,17 @@ Before calling a change complete, run checks proportional to the files touched:
 
 ```bash
 # Gateway and adapter
+npm run lint
 npm run typecheck
 npm test
 npm run build
 
 # Mobile TypeScript and protocol behavior
 cd mobile
+npm run lint
 npm run typecheck
 npm test
+npm run config:check
 ```
 
 For image or harness changes:

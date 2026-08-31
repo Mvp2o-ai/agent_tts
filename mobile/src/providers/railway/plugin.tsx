@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { AgentProfile } from "../../settings";
-import type { AttachedRepository } from "../../settings";
+import type { AgentProfile, AttachedRepository } from "../../settings";
 import { preserveAccessibleRepositories } from "../../repository-selection";
 import { findVoiceCredential } from "../../voice-credentials";
 import { getVoiceProvider } from "../../voice-providers";

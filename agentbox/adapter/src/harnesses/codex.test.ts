@@ -158,15 +158,19 @@ describe("createCodexHarness", () => {
     process.env.OPENAI_API_KEY = "sk-test-not-a-real-key";
     try {
       createCodexHarness("/workspace");
+      process.env.OPENAI_API_KEY = "sk-test-second-key";
+      createCodexHarness("/other-workspace");
       const config = await readFile(join(home, "config.toml"), "utf8");
       assert.match(config, /approval_policy = "never"/);
       assert.match(config, /sandbox_mode = "danger-full-access"/);
       assert.match(config, /cli_auth_credentials_store = "file"/);
       assert.match(config, /trust_level = "trusted"/);
+      assert.doesNotMatch(config, /other-workspace/);
       assert.doesNotMatch(config, /model_reasoning_effort/);
       assert.doesNotMatch(config, /^model\s*=/m);
       const auth = await readFile(join(home, "auth.json"), "utf8");
       assert.match(auth, /OPENAI_API_KEY/);
+      assert.doesNotMatch(auth, /sk-test-second-key/);
       assert.doesNotMatch(config, /sk-test-not-a-real-key/);
     } finally {
       if (prevHome === undefined) delete process.env.CODEX_HOME;

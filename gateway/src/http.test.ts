@@ -121,6 +121,37 @@ describe("gateway http", () => {
     }
   });
 
+  it("does not expose adapter startup errors", async () => {
+    const store = new MemoryConfigStore();
+    const { server } = createGateway({
+      token: "test-token",
+      store,
+      boxCommand: [],
+    });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const { port } = server.address() as AddressInfo;
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${port}/v1/debug/prompt`,
+        {
+          method: "POST",
+          headers: {
+            authorization: "Bearer test-token",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ text: "hello" }),
+        },
+      );
+      assert.equal(response.status, 503);
+      assert.deepEqual(await response.json(), { error: "agent unavailable" });
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((err) => (err ? reject(err) : resolve())),
+      );
+      await store.close();
+    }
+  });
+
   it("keeps a turn alive across disconnect and replays missed text on reconnect", async () => {
     const store = new MemoryConfigStore();
     await store.save("default", {

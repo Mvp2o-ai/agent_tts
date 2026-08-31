@@ -4,13 +4,13 @@ plugins {
 }
 
 group = 'dev.agenttts.voiceaudio'
-version = '0.0.1'
+version = '0.1.0'
 
 android {
   namespace "dev.agenttts.voiceaudio"
   defaultConfig {
     versionCode 1
-    versionName "0.0.1"
+    versionName "0.1.0"
     minSdkVersion 24
   }
   compileOptions {

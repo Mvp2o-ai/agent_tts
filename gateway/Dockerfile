@@ -5,7 +5,7 @@
 # image. Only the mounted config volume (SQLite) survives.
 #
 # Node 24: node:sqlite is stable/unflagged (the config store depends on it).
-FROM node:24-bookworm-slim
+FROM node:24-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e
 
 ARG GH_VERSION=2.98.0
 
@@ -14,10 +14,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && arch="$(dpkg --print-architecture)" \
     && case "$arch" in amd64) gharch=amd64 ;; arm64) gharch=arm64 ;; *) echo "unsupported arch: $arch" >&2; exit 1 ;; esac \
-    && curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${gharch}.tar.gz" \
-      | tar -xz -C /tmp \
+    && archive="gh_${GH_VERSION}_linux_${gharch}.tar.gz" \
+    && curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/${archive}" -o "/tmp/${archive}" \
+    && curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_checksums.txt" -o /tmp/gh_checksums.txt \
+    && expected="$(awk -v file="${archive}" '$2 == file { print $1 }' /tmp/gh_checksums.txt)" \
+    && test -n "$expected" \
+    && echo "${expected}  /tmp/${archive}" | sha256sum --check - \
+    && tar -xzf "/tmp/${archive}" -C /tmp \
     && mv "/tmp/gh_${GH_VERSION}_linux_${gharch}/bin/gh" /usr/local/bin/gh \
-    && rm -rf "/tmp/gh_${GH_VERSION}_linux_${gharch}" \
+    && rm -rf "/tmp/gh_${GH_VERSION}_linux_${gharch}" "/tmp/${archive}" /tmp/gh_checksums.txt \
     && git --version \
     && gh --version
 
@@ -38,20 +43,18 @@ RUN npm install -g \
 
 ENV DISABLE_AUTOUPDATER=1
 
-# Adapter (spawned by the gateway as a child process per session).
-WORKDIR /opt/adapter
-COPY agentbox/adapter/package.json agentbox/adapter/tsconfig.json ./
-COPY agentbox/adapter/src ./src
-RUN npm install && npm run build \
-    && find src -name '*.test.ts' -delete
-
-# Gateway.
+# Install the locked workspace once, then build both runtime processes.
 WORKDIR /app
 COPY package.json package-lock.json ./
+COPY gateway/package.json ./gateway/package.json
+COPY agentbox/adapter/package.json ./agentbox/adapter/package.json
+RUN npm ci
+
 COPY gateway ./gateway
 COPY agentbox/adapter ./agentbox/adapter
-RUN npm install \
-    && npm run build --workspace=@agent_tts/gateway
+RUN npm run build --workspaces --if-present \
+    && npm prune --omit=dev \
+    && find gateway/src agentbox/adapter/src -name '*.test.ts' -delete
 
 RUN useradd -m agent \
     && mkdir /workspace /data \
@@ -76,7 +79,7 @@ ENV NODE_ENV=production \
     GIT_TERMINAL_PROMPT=0 \
     CODEX_HOME=/home/agent/.codex \
     NO_OPEN_BROWSER=1 \
-    AGENTBOX_COMMAND="node /opt/adapter/dist/index.js" \
+    AGENTBOX_COMMAND="node /app/agentbox/adapter/dist/index.js" \
     WORKSPACE_DIR=/workspace \
     CONFIG_DB=/data/agent_tts.db
 

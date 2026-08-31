@@ -70,7 +70,7 @@ git clone <your fork>
 cd agent_tts
 cp .env.example .env   # GATEWAY_TOKEN, optional STT_PROVIDER/TTS_PROVIDER, voice keys
 
-npm install && npm test
+npm ci && npm test
 docker compose up -d --build    # one agent container + SQLite volume
 ```
 
@@ -121,7 +121,7 @@ For a local native build instead:
 
 ```bash
 cd mobile
-npm install
+npm ci
 # Optional for a fork with its own GitHub OAuth App:
 # export EXPO_PUBLIC_GITHUB_CLIENT_ID=<your-github-oauth-client-id>
 npx expo run:ios      # or run:android — dev client, not Expo Go
@@ -192,6 +192,15 @@ NDJSON events back. Use it to prove a harness works before touching audio.
 Gateway → adapter: `{ "type": "prompt", "id", "text" }` · `{ "type": "abort", "reason": "stop_word"|"user" }`
 
 Adapter → gateway: `chunk` · `tool_event` · `done` · `aborted` · `error` (JSON lines on stdio)
+
+## Contributing
+
+Open a pull request against `main`. External contributors fork first; people
+with write access can use a branch in this repo. CI must stay green. See
+[`CONTRIBUTING.md`](./CONTRIBUTING.md), [`SECURITY.md`](./SECURITY.md), and the
+[`Code of Conduct`](./CODE_OF_CONDUCT.md). Support, maintainership, and release
+policy are documented in [`SUPPORT.md`](./SUPPORT.md),
+[`MAINTAINERS.md`](./MAINTAINERS.md), and [`RELEASING.md`](./RELEASING.md).
 
 ## License
 

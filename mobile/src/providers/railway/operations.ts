@@ -40,12 +40,12 @@ export async function listRailwayWorkspaces(
   const data = await railwayGraphql<{
     me: {
       id: string;
-      workspaces: Array<{
+      workspaces: {
         id: string;
         name: string;
         plan: string;
-        members: Array<{ id: string; role: string }>;
-      }>;
+        members: { id: string; role: string }[];
+      }[];
     };
   }>(
     accessToken,
@@ -361,7 +361,7 @@ export async function getLatestRailwayDeployment(
 ): Promise<RailwayDeployment | undefined> {
   const data = await railwayGraphql<{
     deployments: {
-      edges: Array<{ node: RailwayDeployment }>;
+      edges: { node: RailwayDeployment }[];
     };
   }>(
     accessToken,

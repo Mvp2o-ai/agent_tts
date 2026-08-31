@@ -106,7 +106,7 @@ describe("device settings", () => {
     };
     const serialized = JSON.parse(
       serializeDeviceSettings(stopped),
-    ) as { agents: Array<{ desiredState?: string }> };
+    ) as { agents: { desiredState?: string }[] };
     assert.equal(serialized.agents[0]?.desiredState, "stopped");
     assert.equal(
       activeAgent(parseDeviceSettings(serializeDeviceSettings(stopped))).desiredState,
@@ -390,7 +390,7 @@ describe("device settings", () => {
     assert.equal("modelKeys" in serialized, false);
     assert.ok(Array.isArray(serialized.agents));
     assert.equal(
-      (serialized.agents as Array<{ token?: string }>)[0]?.token,
+      (serialized.agents as { token?: string }[])[0]?.token,
       "legacy-token",
     );
     assert.equal(serialized.activeAgentId, "agent-1");

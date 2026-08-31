@@ -41,8 +41,8 @@ const JOINED_PAIR_BOUNDARY = /\s+(?=(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=)/;
 
 export function parseKeyValuePairs(
   text: string,
-): Array<{ name: string; value: string }> {
-  const pairs: Array<{ name: string; value: string }> = [];
+): { name: string; value: string }[] {
+  const pairs: { name: string; value: string }[] = [];
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line || line.startsWith("#")) continue;

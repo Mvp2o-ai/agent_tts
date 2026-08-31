@@ -157,7 +157,7 @@ export function RailwayAgentScreen({
             <View style={styles.readyRow}>
               <View style={styles.readyDot} />
               <Text style={styles.readyText}>
-                Voice keys ready — you're good to launch
+                Voice keys ready — you&apos;re good to launch
               </Text>
             </View>
           )}

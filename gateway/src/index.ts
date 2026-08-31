@@ -9,12 +9,10 @@
 
 import { createGateway } from "./http.js";
 import { SqliteConfigStore, MemoryConfigStore } from "./config-store.js";
+import { requireGatewayToken } from "./gateway-token.js";
 
 const PORT = Number(process.env.PORT ?? 4100);
-const token = process.env.GATEWAY_TOKEN;
-if (!token) {
-  throw new Error("GATEWAY_TOKEN is required");
-}
+const token = requireGatewayToken(process.env.GATEWAY_TOKEN);
 
 const dbPath = process.env.CONFIG_DB ?? "./data/agent_tts.db";
 const store =
@@ -22,7 +20,7 @@ const store =
 
 const boxCommand = process.env.AGENTBOX_COMMAND?.trim()
   ? process.env.AGENTBOX_COMMAND.split(" ").filter(Boolean)
-  : ["node", "/opt/adapter/dist/index.js"];
+  : ["node", "/app/agentbox/adapter/dist/index.js"];
 
 const voiceSecrets: Record<string, string> = {};
 for (const [key, value] of Object.entries(process.env)) {

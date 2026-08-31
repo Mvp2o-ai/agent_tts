@@ -1,0 +1,45 @@
+name: Bug report
+description: Report a reproducible problem in agent_tts
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: checkboxes
+    attributes:
+      label: Before filing
+      options:
+        - label: I searched existing issues for this problem.
+          required: true
+        - label: I removed tokens, API keys, repository credentials, and private URLs.
+          required: true
+  - type: dropdown
+    attributes:
+      label: Area
+      options:
+        - Mobile app
+        - Gateway / voice
+        - Agent adapter / harness
+        - Runtime image
+        - Provider driver
+        - Documentation
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Reproduction
+      description: Provide the smallest reliable sequence of steps.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Environment and logs
+      description: Include OS, device/simulator, image version, harness, and sanitized logs.

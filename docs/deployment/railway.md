@@ -134,11 +134,18 @@ railway init          # new project, empty, in this workspace — not an existin
 railway add           # one empty service named `agent`, or let IaC create it
 ```
 
-Set secrets **before** the first `config apply` so `preserve()` has values:
+Set secrets **before** the first `config apply` so `preserve()` has values.
+Do not type literal secrets into a command that your shell will retain. Load
+them from the gitignored local `.env` and pass environment references:
 
 ```bash
-railway variable set GATEWAY_TOKEN=… STT_PROVIDER=deepgram TTS_PROVIDER=elevenlabs \
-  DEEPGRAM_API_KEY=… ELEVENLABS_API_KEY=… \
+set -a
+source .env
+set +a
+railway variable set "GATEWAY_TOKEN=$GATEWAY_TOKEN" \
+  "STT_PROVIDER=$STT_PROVIDER" "TTS_PROVIDER=$TTS_PROVIDER" \
+  "DEEPGRAM_API_KEY=$DEEPGRAM_API_KEY" \
+  "ELEVENLABS_API_KEY=$ELEVENLABS_API_KEY" \
   --service agent
 ```
 

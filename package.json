@@ -3,17 +3,25 @@
   "private": true,
   "version": "0.1.0",
   "license": "AGPL-3.0-only",
+  "engines": {
+    "node": ">=22"
+  },
   "workspaces": [
     "gateway",
     "agentbox/adapter"
   ],
   "scripts": {
-    "lint": "npm run lint --workspaces --if-present",
+    "lint": "eslint gateway/src agentbox/adapter/src --max-warnings 0",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "build": "npm run build --workspaces --if-present",
     "image": "docker build -t agent_tts:local -f gateway/Dockerfile .",
     "dev:gateway": "npm run dev --workspace=@agent_tts/gateway",
     "mobile:install": "npm --prefix mobile run install:device"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.9.1",
+    "typescript-eslint": "^8.68.0"
   }
 }

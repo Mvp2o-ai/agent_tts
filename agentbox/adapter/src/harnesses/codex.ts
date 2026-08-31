@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Harness, HarnessEvents, HarnessRunOpts } from "../harness.js";
@@ -112,11 +112,7 @@ export function ensureCodexAuth(home = process.env.CODEX_HOME ?? join(homedir(),
   const key = resolveCodexApiKey();
   mkdirSync(home, { recursive: true });
   const file = join(home, "auth.json");
-  if (key && !existsSync(file)) {
-    writeFileSync(file, JSON.stringify({ OPENAI_API_KEY: key }), {
-      mode: 0o600,
-    });
-  }
+  if (key) writePrivateFileIfMissing(file, JSON.stringify({ OPENAI_API_KEY: key }));
   return home;
 }
 
@@ -132,22 +128,27 @@ export function ensureCodexYoloConfig(
 ): string {
   mkdirSync(home, { recursive: true });
   const file = join(home, "config.toml");
-  if (!existsSync(file)) {
-    writeFileSync(
-      file,
-      [
-        `approval_policy = "never"`,
-        `sandbox_mode = "danger-full-access"`,
-        `cli_auth_credentials_store = "file"`,
-        ``,
-        `[projects.${JSON.stringify(cwd)}]`,
-        `trust_level = "trusted"`,
-        ``,
-      ].join("\n"),
-      { mode: 0o600 },
-    );
-  }
+  writePrivateFileIfMissing(
+    file,
+    [
+      `approval_policy = "never"`,
+      `sandbox_mode = "danger-full-access"`,
+      `cli_auth_credentials_store = "file"`,
+      ``,
+      `[projects.${JSON.stringify(cwd)}]`,
+      `trust_level = "trusted"`,
+      ``,
+    ].join("\n"),
+  );
   return file;
+}
+
+function writePrivateFileIfMissing(file: string, contents: string): void {
+  try {
+    writeFileSync(file, contents, { mode: 0o600, flag: "wx" });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
 }
 
 /** `codex exec [OPTIONS] [PROMPT]` / `codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]` */

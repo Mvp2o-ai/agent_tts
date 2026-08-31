@@ -15,7 +15,7 @@ audio session.
 
 ```bash
 cd mobile
-npm install
+npm ci
 # Optional for a fork:
 # export EXPO_PUBLIC_GITHUB_CLIENT_ID=<github-oauth-client-id>
 # export EXPO_PUBLIC_AGENT_RUNTIME_IMAGE=ghcr.io/your-org/agent_tts@sha256:...

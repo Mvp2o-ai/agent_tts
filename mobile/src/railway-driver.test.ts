@@ -286,7 +286,7 @@ describe("Railway provisioning driver", () => {
   });
 
   it("reconciles a failed checkpoint to one fresh deployment", async () => {
-    const deploymentIds: Array<string | undefined> = [];
+    const deploymentIds: (string | undefined)[] = [];
     const initial = {
       ...newRailwayProvisioningState({
         provisioningId: "agent-1",
@@ -388,10 +388,10 @@ describe("Railway provisioning driver", () => {
   });
 
   it("stops the persisted deployment and starts a fresh deployment", async () => {
-    const operations: Array<{
+    const operations: {
       name: string;
       variables: Record<string, unknown>;
-    }> = [];
+    }[] = [];
     const initial = {
       ...newRailwayProvisioningState({
         provisioningId: "agent-1",

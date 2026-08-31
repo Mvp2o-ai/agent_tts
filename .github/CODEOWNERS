@@ -1,0 +1,7 @@
+# Maintainers review all changes, including workflow and security-sensitive code.
+* @wiltshirek @kenainative
+
+/.github/ @wiltshirek @kenainative
+/gateway/ @wiltshirek @kenainative
+/agentbox/ @wiltshirek @kenainative
+/mobile/ @wiltshirek @kenainative

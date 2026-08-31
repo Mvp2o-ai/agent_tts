@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/Mvp2o-ai/agent_tts/security/advisories/new
+    about: Report vulnerabilities privately; never disclose secrets in an issue.

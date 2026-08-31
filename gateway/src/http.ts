@@ -278,10 +278,8 @@ async function debugPrompt(
   let box: BoxConnection;
   try {
     box = openBox(opts, config);
-  } catch (err) {
-    json(res, 503, {
-      error: err instanceof Error ? err.message : String(err),
-    });
+  } catch {
+    json(res, 503, { error: "agent unavailable" });
     return;
   }
 
@@ -299,23 +297,21 @@ async function debugPrompt(
     },
   };
 
-  let turn!: AgentTurn;
+  const turn = new AgentTurn(box, sink, config, getTtsAdapter(runtime), {
+    onIdle: endOnce,
+    getConfig: () => opts.store.get(userId),
+  });
   const timer = setTimeout(() => {
     void turn.close();
     if (!res.writableEnded) res.end();
   }, 10 * 60 * 1000);
 
-  const endOnce = () => {
+  function endOnce() {
     clearTimeout(timer);
     void turn.close().then(() => {
       if (!res.writableEnded) res.end();
     });
-  };
-
-  turn = new AgentTurn(box, sink, config, getTtsAdapter(runtime), {
-    onIdle: endOnce,
-    getConfig: () => opts.store.get(userId),
-  });
+  }
   turn.initialize(config.repo.credential);
   turn.enqueue(text);
 }

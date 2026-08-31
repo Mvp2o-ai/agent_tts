@@ -246,7 +246,7 @@ export class AgentTurn {
   }
 
   private async dispatchPrompt(next: { id: string; text: string }): Promise<void> {
-    let latest = this.config;
+    let latest: UserConfig;
     try {
       latest = await this.getConfig!();
     } catch {
