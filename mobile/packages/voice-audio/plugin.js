@@ -67,4 +67,4 @@ function withVoiceAudio(config, props = {}) {
   return config;
 }
 
-module.exports = createRunOncePlugin(withVoiceAudio, "voice-audio", "0.0.1");
+module.exports = createRunOncePlugin(withVoiceAudio, "voice-audio", "0.1.0");

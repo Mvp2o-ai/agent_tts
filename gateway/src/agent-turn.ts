@@ -3,7 +3,7 @@ import { isTerminal, type BoxInbound, type BoxOutbound } from "./box-protocol.js
 import type { UserConfig } from "./config-schema.js";
 import { PromptQueue } from "./prompt-queue.js";
 import { SpeechBuffer } from "./speech-buffer.js";
-import { openElevenLabs, type TtsStream } from "./elevenlabs.js";
+import type { TtsAdapter, TtsStream } from "./voice-providers.js";
 
 export type ClientEvent =
   | {
@@ -31,7 +31,6 @@ export interface VoiceSink {
 }
 
 export type OpenTts = (opts: {
-  apiKey: string;
   voiceId: string;
   onAudio: (pcm: Buffer) => void;
   onError: (err: Error) => void;
@@ -91,10 +90,11 @@ export class AgentTurn {
   private readySettled = false;
   private resolveReady!: () => void;
   private rejectReady!: (error: Error) => void;
-  private readonly openTts: OpenTts;
+  private readonly openTts?: OpenTts;
   private readonly onIdle?: () => void;
   private readonly getConfig?: () => Promise<UserConfig>;
   private promptDispatched = false;
+  private readonly ttsAdapter?: TtsAdapter;
 
   get activity(): "idle" | "working" | "speaking" {
     if (this.speaking) return "speaking";
@@ -113,10 +113,11 @@ export class AgentTurn {
     private readonly box: BoxConnection,
     private readonly sink: VoiceSink,
     private readonly config: UserConfig,
-    private readonly elevenKey: string | undefined,
+    ttsAdapter?: TtsAdapter,
     options: AgentTurnOptions = {},
   ) {
-    this.openTts = options.openTts ?? openElevenLabs;
+    this.ttsAdapter = ttsAdapter;
+    this.openTts = options.openTts;
     this.onIdle = options.onIdle;
     this.getConfig = options.getConfig;
     this.ready = new Promise<void>((resolve, reject) => {
@@ -245,7 +246,7 @@ export class AgentTurn {
   }
 
   private async dispatchPrompt(next: { id: string; text: string }): Promise<void> {
-    let latest = this.config;
+    let latest: UserConfig;
     try {
       latest = await this.getConfig!();
     } catch {
@@ -354,14 +355,16 @@ export class AgentTurn {
       return;
     }
     if (this.phase !== "running") return;
-    if (!this.elevenKey || phrases.length === 0) return;
+    if ((!this.ttsAdapter && !this.openTts) || phrases.length === 0) return;
     const voiceId = this.config.voice.ttsVoiceId || "21m00Tcm4TlvDq8ikWAM";
     if (!this.tts) {
       const gen = ++this.ttsGen;
       this.speaking = true;
       this.sink.sendJson({ type: "tts_start" });
-      this.tts = this.openTts({
-        apiKey: this.elevenKey,
+      const openTts = this.ttsAdapter
+        ? (opts: Parameters<TtsAdapter["open"]>[0]) => this.ttsAdapter!.open(opts)
+        : this.openTts!;
+      this.tts = openTts({
         voiceId,
         onAudio: (pcm) => {
           if (this.ttsGen !== gen || this.muted) return;

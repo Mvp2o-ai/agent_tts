@@ -1,5 +1,5 @@
 import type { AgentTurn, VoiceSink } from "./agent-turn.js";
-import type { TranscriptEvent } from "./deepgram.js";
+import type { TranscriptEvent } from "./voice-providers.js";
 import { StopLatch } from "./stop-word.js";
 
 /** The STT router only needs turn control, not the full AgentTurn surface. */

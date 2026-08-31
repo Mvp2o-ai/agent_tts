@@ -98,13 +98,18 @@ describe("repository destinations", () => {
 });
 
 describe("repository provisioning", () => {
-  it("clones every selected repository as a workspace sibling in order", async () => {
+  it("clones the optional startup set as workspace siblings in order", async () => {
     const calls: { args: string[]; cwd: string }[] = [];
     const events: string[] = [];
     await provisionRepositories({
       workspace: "/tmp/nonexistent-agent-tts-test-workspace",
       repositories: [
-        { id: 1, fullName: "acme/one", cloneUrl: "https://github.com/acme/one.git" },
+        {
+          id: 1,
+          fullName: "acme/one",
+          cloneUrl: "https://github.com/acme/one.git",
+          defaultBranch: "trunk",
+        },
         { id: 2, fullName: "acme/two", cloneUrl: "https://github.com/acme/two.git" },
       ],
       onProgress: (event) =>

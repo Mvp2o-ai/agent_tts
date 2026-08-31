@@ -11,7 +11,7 @@ describe("GitHub device flow", () => {
   it("requests a device code without a client secret", async () => {
     let requestBody = "";
     const authorization = await requestGithubDeviceCode(
-      "Iv1.public-client",
+      "Ov23.public-client",
       async (_url, init) => {
         requestBody = String(init?.body ?? "");
         return Response.json({
@@ -25,7 +25,8 @@ describe("GitHub device flow", () => {
         });
       },
     );
-    assert.match(requestBody, /client_id=Iv1.public-client/);
+    assert.match(requestBody, /client_id=Ov23.public-client/);
+    assert.match(requestBody, /scope=repo\+offline_access/);
     assert.doesNotMatch(requestBody, /secret/i);
     assert.equal(authorization.userCode, "ABCD-EFGH");
     assert.match(authorization.verificationUriComplete ?? "", /ABCD-EFGH/);
@@ -35,7 +36,7 @@ describe("GitHub device flow", () => {
     let requests = 0;
     let now = 0;
     const token = await pollGithubDeviceToken(
-      "Iv1.public-client",
+      "Ov23.public-client",
       {
         deviceCode: "device",
         userCode: "CODE",
@@ -62,10 +63,10 @@ describe("GitHub device flow", () => {
     assert.equal(requests, 2);
   });
 
-  it("preserves refresh metadata for expiring GitHub App tokens", async () => {
+  it("preserves refresh metadata for expiring OAuth tokens", async () => {
     let now = 0;
     const credential = await pollGithubDeviceToken(
-      "Iv1.public-client",
+      "Ov23.public-client",
       {
         deviceCode: "device",
         userCode: "CODE",
@@ -98,7 +99,7 @@ describe("GitHub device flow", () => {
   it("refreshes an expiring token without a client secret", async () => {
     let requestBody = "";
     const credential = await refreshGithubCredential(
-      "Iv1.public-client",
+      "Ov23.public-client",
       {
         accessToken: "old",
         refreshToken: "refresh-old",
@@ -129,7 +130,7 @@ describe("GitHub device flow", () => {
     let requested = false;
     await assert.rejects(
       pollGithubDeviceToken(
-        "Iv1.public-client",
+        "Ov23.public-client",
         {
           deviceCode: "device",
           userCode: "CODE",
@@ -156,19 +157,15 @@ describe("GitHub repositories", () => {
     const urls: string[] = [];
     const repositories = await listGithubRepositories("token", async (url) => {
       urls.push(url);
-      return url.includes("/user/installations?")
-        ? Response.json({ installations: [{ id: 42 }] })
-        : Response.json({
-            repositories: [
-              {
-                id: 7,
-                full_name: "acme/api",
-                clone_url: "https://github.com/acme/api.git",
-                default_branch: "trunk",
-                private: true,
-              },
-            ],
-          });
+      return Response.json([
+        {
+          id: 7,
+          full_name: "acme/api",
+          clone_url: "https://github.com/acme/api.git",
+          default_branch: "trunk",
+          private: true,
+        },
+      ]);
     });
     assert.deepEqual(repositories, [
       {
@@ -179,10 +176,7 @@ describe("GitHub repositories", () => {
         private: true,
       },
     ]);
-    assert.equal(
-      urls.some((url) => url.includes("/user/installations/42/repositories")),
-      true,
-    );
-    assert.equal(urls.some((url) => url.includes("/user/repos")), false);
+    assert.equal(urls.some((url) => url.includes("/user/repos")), true);
+    assert.equal(urls.some((url) => url.includes("/user/installations")), false);
   });
 });

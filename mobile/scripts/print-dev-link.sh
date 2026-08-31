@@ -6,20 +6,37 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-DEV_LINK="$(npx eas-cli build:list --platform ios --limit 10 --json --non-interactive 2>/dev/null | python3 -c "
-import sys, json
-builds = json.load(sys.stdin)
-for b in builds:
-    if b.get('buildProfile') == 'development' and b.get('status') in ('FINISHED', 'IN_PROGRESS', 'IN_QUEUE', 'NEW'):
-        owner = b['project']['ownerAccount']['name']
-        slug = b['project']['slug']
-        print(f\"https://expo.dev/accounts/{owner}/projects/{slug}/builds/{b['id']}\")
-        sys.exit(0)
-print('NO_BUILD_FOUND')
-")"
+PLATFORM="${1:-ios}"
+PROFILE="${2:-preview}"
+if [[ "$PLATFORM" != "ios" && "$PLATFORM" != "android" ]]; then
+  echo "Usage: bash scripts/print-dev-link.sh [ios|android] [profile]" >&2
+  exit 2
+fi
+
+DEV_LINK="$(npx --yes eas-cli@latest build:list --platform "$PLATFORM" --limit 10 --json --non-interactive 2>/dev/null | node -e "
+const profile = process.argv[1];
+let input = '';
+process.stdin.on('data', chunk => input += chunk);
+process.stdin.on('end', () => {
+  const builds = JSON.parse(input);
+  const build = builds.find(candidate =>
+    candidate.buildProfile === profile &&
+    ['FINISHED', 'IN_PROGRESS', 'IN_QUEUE', 'NEW'].includes(candidate.status)
+  );
+  if (!build) {
+    console.log('NO_BUILD_FOUND');
+    return;
+  }
+  const project = build.app ?? build.project;
+  const owner = project.ownerAccount.name;
+  console.log(
+    \`https://expo.dev/accounts/\${owner}/projects/\${project.slug}/builds/\${build.id}\`
+  );
+});
+" "$PROFILE")"
 
 if [[ "$DEV_LINK" == "NO_BUILD_FOUND" ]]; then
-  echo "NO_BUILD_FOUND — run: npm run eas:device:ios" >&2
+  echo "NO_BUILD_FOUND for profile $PROFILE — run: npm run install:device -- $PLATFORM" >&2
   exit 1
 fi
 

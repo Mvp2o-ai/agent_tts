@@ -11,23 +11,38 @@ import {
 import { MicIcon, MicOffIcon, WaveIcon } from "./icons";
 import { color, font, shadow, space } from "./theme";
 
-export type TalkState = "offline" | "idle" | "capturing" | "speaking";
+export type TalkState =
+  | "needs-setup"
+  | "stopped"
+  | "starting"
+  | "unreachable"
+  | "gone"
+  | "idle"
+  | "capturing"
+  | "working"
+  | "speaking";
 
 export function TalkButton({
   mode,
   state,
+  detail,
   onPressIn,
   onPressOut,
 }: {
   mode: "ptt" | "handsfree";
   state: TalkState;
+  detail?: string;
   onPressIn: () => void;
   onPressOut: () => void;
 }) {
   const { width } = useWindowDimensions();
   const diameter = Math.max(150, Math.min(232, width - 120));
   const active = state === "capturing";
-  const live = state !== "offline";
+  const live =
+    state === "idle" ||
+    state === "capturing" ||
+    state === "working" ||
+    state === "speaking";
 
   const press = useRef(new Animated.Value(0)).current;
   useEffect(() => {
@@ -44,13 +59,13 @@ export function TalkButton({
 
   const ringColor = state === "speaking" ? color.agent : color.accent;
   const fill =
-    state === "offline"
+    !live
       ? color.surface
       : active
         ? color.accentDeep
         : color.surfaceRaised;
   const border =
-    state === "offline"
+    !live
       ? color.border
       : active
         ? color.accent
@@ -58,7 +73,7 @@ export function TalkButton({
           ? color.agent
           : color.borderStrong;
 
-  const glyphColor = state === "offline" ? color.textDim : color.text;
+  const glyphColor = !live ? color.textDim : color.text;
   const glyphSize = diameter * 0.3;
 
   const content = (
@@ -101,7 +116,7 @@ export function TalkButton({
           },
         ]}
       >
-        {state === "offline" ? (
+        {!live ? (
           <MicOffIcon size={glyphSize} color={glyphColor} />
         ) : state === "speaking" ? (
           <WaveIcon size={glyphSize} color={color.agent} />
@@ -112,7 +127,7 @@ export function TalkButton({
     </View>
   );
 
-  const caption = captionFor(mode, state);
+  const caption = captionFor(mode, state, detail);
 
   return (
     <View style={styles.wrap}>
@@ -146,11 +161,36 @@ export function TalkButton({
 function captionFor(
   mode: "ptt" | "handsfree",
   state: TalkState,
+  detail?: string,
 ): { title: string; subtitle: string } {
-  if (state === "offline") {
+  if (state === "needs-setup") {
     return {
-      title: "Mic closed",
-      subtitle: "Connect to open a session.",
+      title: "Agent needs setup",
+      subtitle: "Open agent settings to finish configuration.",
+    };
+  }
+  if (state === "stopped") {
+    return {
+      title: "Session ended",
+      subtitle: "Start a new session.",
+    };
+  }
+  if (state === "starting") {
+    return {
+      title: "Starting session",
+      subtitle: detail || "Preparing runtime…",
+    };
+  }
+  if (state === "unreachable") {
+    return {
+      title: "Session unreachable",
+      subtitle: detail || "Check its host, network, or gateway token.",
+    };
+  }
+  if (state === "gone") {
+    return {
+      title: "Deployment removed",
+      subtitle: detail || "This agent no longer exists at its provider.",
     };
   }
   if (state === "speaking") {
@@ -162,6 +202,13 @@ function captionFor(
   }
   if (state === "capturing") {
     return { title: "Listening", subtitle: "Release to send." };
+  }
+  if (state === "working") {
+    return {
+      title: "Agent working",
+      subtitle:
+        mode === "ptt" ? "Hold to add another instruction." : "Speak any time.",
+    };
   }
   return mode === "ptt"
     ? { title: "Hold to talk", subtitle: "Press and hold, then release." }

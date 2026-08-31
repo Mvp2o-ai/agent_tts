@@ -1,17 +1,15 @@
 import { StatusBar } from "expo-status-bar";
+import * as Crypto from "expo-crypto";
 import {
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
-  type ReactNode,
 } from "react";
 import {
   Alert,
-  KeyboardAvoidingView,
   Linking,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -19,17 +17,20 @@ import {
   View,
 } from "react-native";
 import {
-  fetchConfig,
   fetchModelCatalog,
-  killSession,
   resetSession,
   saveConfig,
   type ModelCatalog,
+  type UserConfig,
 } from "./src/api";
+import {
+  agentConfigurationIssue,
+  deriveAgentLifecycle,
+  providerAllowsSessionConnection,
+} from "./src/agent-lifecycle";
 import type { CredentialEntry } from "./src/credential-vault";
 import {
   fetchGithubIdentity,
-  GITHUB_APP_SLUG,
   GITHUB_CLIENT_ID,
   listGithubRepositories,
   pollGithubDeviceToken,
@@ -37,56 +38,73 @@ import {
   serializeGithubCredential,
 } from "./src/github";
 import { connectionError, normalizeGatewayUrl } from "./src/protocol";
+import { parseAgentPairingUrl } from "./src/pairing";
+import { useProviderRegistry } from "./src/providers/registry";
 import {
   credentialVault,
   githubAccessToken,
 } from "./src/secure-credential-vault";
 import {
   activeAgent,
+  DEFAULT_DEVICE_SETTINGS,
   HARNESSES,
-  withHarness,
+  resolveAgentRuntimeSettings,
+  updateAgentHarness,
   type AgentProfile,
+  type AgentRuntimeSettings,
   type AttachedRepository,
   type DeviceSettings,
 } from "./src/settings";
 import { useDeviceSettings } from "./src/useDeviceSettings";
 import { useVoiceSession, type VoiceMode } from "./src/useVoiceSession";
+import { hydrateVoiceProviderId } from "./src/voice-providers";
+import {
+  AddAgentScreen,
+  ManualAgentScreen,
+} from "./src/ui/AgentSetup";
+import { AgentDetailScreen } from "./src/ui/AgentDetail";
+import { AppSettingsScreen } from "./src/ui/AppSettings";
+import { AgentTray, type AgentTrayItem } from "./src/ui/AgentTray";
+import { GithubRepositoryPicker } from "./src/ui/GithubRepositoryPicker";
+import { PairingScannerScreen } from "./src/ui/PairingScanner";
 import {
   Button,
   Card,
   Field,
   SectionLabel,
   Segmented,
-  StatusPill,
   Toast,
 } from "./src/ui/components";
 import {
   CheckIcon,
-  DownloadIcon,
+  BrandIcon,
   GearIcon,
   LinkIcon,
   MicIcon,
-  PowerIcon,
   StopIcon,
-  TrashIcon,
-  UploadIcon,
   WaveIcon,
 } from "./src/ui/icons";
 import { TalkButton, type TalkState } from "./src/ui/TalkButton";
 import { Transcript } from "./src/ui/Transcript";
 import { color, font, inset, radius, space } from "./src/ui/theme";
 
-type Tab = "talk" | "settings";
+type AgentSetupScreen =
+  | "choose"
+  | "manual"
+  | "scan"
+  | `provider:${string}`;
 type ManagedSession = ReturnType<typeof useVoiceSession>;
 
 const EMPTY_SESSION: ManagedSession = {
   status: "disconnected",
+  availability: "unknown",
   events: [],
   speaking: false,
   working: false,
   harness: "",
   generationId: "",
   provisioning: null,
+  lastError: "",
   connect: () => undefined,
   disconnect: () => undefined,
   pttStart: () => undefined,
@@ -95,29 +113,40 @@ const EMPTY_SESSION: ManagedSession = {
 };
 
 export default function App() {
-  const [tab, setTab] = useState<Tab>("talk");
   const [mode, setMode] = useState<VoiceMode>("ptt");
   const [pttHeld, setPttHeld] = useState(false);
   const { settings, setSettings, hydrated } = useDeviceSettings();
   const [configMsg, setConfigMsg] = useState("");
   const [configOk, setConfigOk] = useState(false);
-  const [configBusy, setConfigBusy] = useState(false);
-  const [configAction, setConfigAction] = useState<"load" | "save" | null>(
-    null,
-  );
   const [sessions, setSessions] = useState<Record<string, ManagedSession>>({});
   const [credentials, setCredentials] = useState<CredentialEntry[]>([]);
   const [githubRepositories, setGithubRepositories] = useState<
     AttachedRepository[]
   >([]);
+  const [githubRepositoryCredentialId, setGithubRepositoryCredentialId] =
+    useState<string | undefined>();
   const [githubSearch, setGithubSearch] = useState("");
   const [githubBusy, setGithubBusy] = useState(false);
-  const [modelCredentialLabel, setModelCredentialLabel] = useState("");
   const [legacySecretsMigrated, setLegacySecretsMigrated] = useState(false);
   const [modelCatalog, setModelCatalog] = useState<ModelCatalog | null>(null);
+  const [agentSetupScreen, setAgentSetupScreen] =
+    useState<AgentSetupScreen | null>(null);
+  const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
+  const [lifecycleBusyAgentId, setLifecycleBusyAgentId] = useState<string | null>(
+    null,
+  );
+  const [removingAgentId, setRemovingAgentId] = useState<string | null>(null);
+  const [manualName, setManualName] = useState("");
+  const [manualGatewayUrl, setManualGatewayUrl] = useState("");
+  const [manualGatewayToken, setManualGatewayToken] = useState("");
+  const [manualBusy, setManualBusy] = useState(false);
+  const [showAppSettings, setShowAppSettings] = useState(false);
   const migrationStartedRef = useRef(false);
 
   const agent = activeAgent(settings);
+  const runtime = resolveAgentRuntimeSettings(agent, settings);
+  const sttProviderId = hydrateVoiceProviderId("stt", settings.sttProviderId);
+  const ttsProviderId = hydrateVoiceProviderId("tts", settings.ttsProviderId);
   const conn = useMemo(
     () => ({
       gatewayUrl: normalizeGatewayUrl(agent.gatewayUrl),
@@ -135,17 +164,13 @@ export default function App() {
     [],
   );
   const session = sessions[agent.id] ?? EMPTY_SESSION;
-  const connected = session.status !== "disconnected";
+  const activeAgentConfigured = isAgentEndpointConfigured(agent);
 
   const selectedHarness =
-    HARNESSES.find((h) => h.id === settings.harness) ?? HARNESSES[0]!;
-  const activeModelLabel = resolveModelLabel(modelCatalog, settings.model);
-  const selectedGitCredential = credentials.find(
-    (entry) => entry.id === agent.gitCredentialId,
-  );
-  const visibleGithubRepositories = githubRepositories.filter((repository) =>
-    repository.fullName.toLowerCase().includes(githubSearch.trim().toLowerCase()),
-  );
+    HARNESSES.find((h) => h.id === runtime.harness) ?? HARNESSES[0]!;
+  const gatewayCredentialSignature = settings.agents
+    .map((profile) => `${profile.id}:${profile.gatewayCredentialId ?? ""}`)
+    .join("|");
 
   const patch = (partial: Partial<DeviceSettings>) =>
     setSettings((prev) => ({ ...prev, ...partial }));
@@ -161,6 +186,17 @@ export default function App() {
       };
     });
 
+  const patchAgent = (id: string, partial: Partial<AgentProfile>) =>
+    setSettings((prev) => ({
+      ...prev,
+      agents: prev.agents.map((profile) =>
+        profile.id === id ? { ...profile, ...partial } : profile,
+      ),
+    }));
+
+  const patchActiveAgentRuntime = (partial: Partial<AgentRuntimeSettings>) =>
+    setSettings((prev) => withActiveAgentRuntime(prev, partial));
+
   const selectAgent = (id: string) => {
     setPttHeld(false);
     setSettings((prev) => ({
@@ -170,33 +206,102 @@ export default function App() {
       modelKeys: {},
     }));
     setGithubRepositories([]);
+    setGithubRepositoryCredentialId(undefined);
     setGithubSearch("");
   };
 
   const addAgent = () => {
-    const id = `agent-${Date.now()}`;
-    const projectNumber =
-      settings.agents.reduce((max, profile) => {
-        const match = /^Project (\d+)$/i.exec(profile.name.trim());
-        return match ? Math.max(max, Number(match[1])) : max;
-      }, 0) + 1;
-    const profile: AgentProfile = {
-      id,
-      name: `Project ${projectNumber}`,
-      gatewayUrl: "http://",
-      token: "",
-    };
-    setSettings((prev) => ({
-      ...prev,
-      agents: [...prev.agents, profile],
-      activeAgentId: id,
-    }));
+    setManualName("");
+    setAgentSetupScreen("choose");
   };
 
-  const removeAgent = (id: string) =>
+  const editAgent = (id: string) => {
+    selectAgent(id);
+    setEditingAgentId(id);
+  };
+
+  const openAgentMenu = (id: string) => {
+    const profile = settings.agents.find((candidate) => candidate.id === id);
+    if (!profile) return;
+    const settingsAction = {
+      text: "Agent settings",
+      onPress: () => editAgent(id),
+    };
+    if (!isAgentEndpointConfigured(profile)) {
+      Alert.alert(profile.name, "This agent needs setup.", [
+        settingsAction,
+        { text: "Cancel", style: "cancel" },
+      ]);
+      return;
+    }
+    const stopped = (profile.desiredState ?? "running") === "stopped";
+    Alert.alert(profile.name, undefined, [
+      settingsAction,
+      {
+        text: stopped ? "Start new session" : "End session",
+        style: stopped ? "default" : "destructive",
+        onPress: () => toggleAgentLifecycle(profile),
+      },
+      { text: "Cancel", style: "cancel" },
+    ]);
+  };
+
+  const saveManualAgent = async () => {
+    setManualBusy(true);
+    try {
+      const gatewayUrl = normalizeGatewayUrl(manualGatewayUrl);
+      const token = manualGatewayToken.trim();
+      const issue = connectionError({
+        gatewayUrl,
+        token,
+        userId: settings.userId,
+      });
+      if (issue) throw new Error(issue);
+      const gatewayCredential = await credentialVault.save({
+        kind: "gateway-token",
+        label: `${manualName.trim()} gateway`,
+        secret: token,
+      });
+      const profile: AgentProfile = {
+        id: Crypto.randomUUID(),
+        name: manualName.trim(),
+        gatewayUrl,
+        token,
+        gatewayCredentialId: gatewayCredential.id,
+        origin: { kind: "manual" },
+      };
+      setSettings((previous) => {
+        const agents = isBlankDefaultProfile(previous.agents)
+          ? [profile]
+          : [...previous.agents, profile];
+        return { ...previous, agents, activeAgentId: profile.id };
+      });
+      refreshCredentials();
+      setManualGatewayToken("");
+      setAgentSetupScreen(null);
+      setEditingAgentId(profile.id);
+      setConfigOk(true);
+      setConfigMsg("Agent added. Configure its repositories and runtime.");
+    } catch (cause) {
+      setConfigOk(false);
+      setConfigMsg(
+        cause instanceof Error ? cause.message : "Could not add this agent.",
+      );
+    } finally {
+      setManualBusy(false);
+    }
+  };
+
+  const removeAgentFromPhone = (id: string) => {
     setSettings((prev) => {
-      if (prev.agents.length <= 1) return prev;
       const agents = prev.agents.filter((a) => a.id !== id);
+      if (agents.length === 0) {
+        const fallback = {
+          ...DEFAULT_DEVICE_SETTINGS.agents[0]!,
+          id: Crypto.randomUUID(),
+        };
+        return { ...prev, agents: [fallback], activeAgentId: fallback.id };
+      }
       const activeAgentId =
         prev.activeAgentId === id ||
         !agents.some((a) => a.id === prev.activeAgentId)
@@ -204,9 +309,99 @@ export default function App() {
           : prev.activeAgentId;
       return { ...prev, agents, activeAgentId };
     });
+    setEditingAgentId(null);
+  };
 
   const refreshCredentials = useCallback(() => {
-    void credentialVault.list().then(setCredentials);
+    return credentialVault.list().then(setCredentials);
+  }, []);
+
+  const onProviderReady = useCallback((_providerId: string, agentId: string) => {
+    setSettings((previous) => ({ ...previous, activeAgentId: agentId }));
+    setAgentSetupScreen(null);
+    setEditingAgentId(agentId);
+    setConfigOk(true);
+    setConfigMsg("Hosted agent is online. Configure its runtime.");
+  }, [setSettings]);
+
+  const providerRegistry = useProviderRegistry({
+    credentials,
+    setSettings,
+    onReady: onProviderReady,
+    onCredentialsChanged: refreshCredentials,
+    sttProviderId,
+    ttsProviderId,
+    openAppSettings: () => setShowAppSettings(true),
+    repositorySetup: {
+      credentials: credentials.filter(
+        (entry) =>
+          entry.kind === "github-token" || entry.kind === "git-pat",
+      ),
+      repositories: githubRepositories,
+      repositoryCredentialId: githubRepositoryCredentialId,
+      busy: githubBusy,
+      search: githubSearch,
+      onSearchChange: setGithubSearch,
+      onSelectCredential: (entry) =>
+        loadGithubRepositoriesForCredential(entry.id),
+      onRefresh: async () => {
+        if (!githubRepositoryCredentialId) return [];
+        return loadGithubRepositoriesForCredential(githubRepositoryCredentialId);
+      },
+    },
+  });
+
+  const removeAgent = async (profile: AgentProfile) => {
+    setRemovingAgentId(profile.id);
+    try {
+      const provider = providerRegistry.forProfile(profile);
+      if (profile.origin?.kind === "provider" && !provider) {
+        throw new Error(
+          `Provider ${profile.origin.providerId ?? "unknown"} is not installed.`,
+        );
+      }
+      if (provider) {
+        await provider.deleteAgent(profile);
+      }
+      removeAgentFromPhone(profile.id);
+      setConfigOk(true);
+      setConfigMsg(
+        provider
+          ? `Agent and its ${provider.definition.label} resources were deleted.`
+          : "Saved agent connection was removed from this phone.",
+      );
+    } catch (cause) {
+      setConfigOk(false);
+      setConfigMsg(
+        cause instanceof Error ? cause.message : "Could not delete this agent.",
+      );
+    } finally {
+      setRemovingAgentId(null);
+    }
+  };
+
+  const openPairingUrl = useCallback((url: string | null) => {
+    if (!url) return;
+    const payload = parseAgentPairingUrl(url);
+    if (!payload) return;
+    setManualName(payload.name ?? "Paired agent");
+    setManualGatewayUrl(payload.gatewayUrl);
+    setManualGatewayToken(payload.gatewayToken);
+    setAgentSetupScreen("manual");
+  }, []);
+
+  const handleScannedPairing = useCallback((value: string) => {
+    const payload = parseAgentPairingUrl(value);
+    if (!payload) {
+      setConfigOk(false);
+      setConfigMsg("That QR code is not an agent_tts setup code.");
+      setAgentSetupScreen("manual");
+      return;
+    }
+    setManualName(payload.name ?? "Paired agent");
+    setManualGatewayUrl(payload.gatewayUrl);
+    setManualGatewayToken(payload.gatewayToken);
+    setAgentSetupScreen("manual");
   }, []);
 
   useEffect(() => {
@@ -214,12 +409,32 @@ export default function App() {
   }, [refreshCredentials]);
 
   useEffect(() => {
+    void Linking.getInitialURL().then(openPairingUrl);
+    const subscription = Linking.addEventListener("url", (event) => {
+      openPairingUrl(event.url);
+    });
+    return () => subscription.remove();
+  }, [openPairingUrl]);
+
+  useEffect(() => {
     if (!hydrated || migrationStartedRef.current) return;
     migrationStartedRef.current = true;
     void (async () => {
       const current = activeAgent(settings);
       const profilePatch: Partial<AgentProfile> = {};
+      const gatewayCredentialIds = new Map<string, string>();
       const imported: CredentialEntry[] = [];
+
+      for (const profile of settings.agents) {
+        if (!profile.token.trim() || profile.gatewayCredentialId) continue;
+        const entry = await credentialVault.save({
+          kind: "gateway-token",
+          label: `${profile.name.trim() || "Agent"} gateway`,
+          secret: profile.token,
+        });
+        gatewayCredentialIds.set(profile.id, entry.id);
+        imported.push(entry);
+      }
 
       if (settings.gitPat && !current.gitCredentialId) {
         const entry = await credentialVault.save({
@@ -247,12 +462,20 @@ export default function App() {
         profilePatch.modelCredentialIds = modelCredentialIds;
       }
 
-      if (Object.keys(profilePatch).length > 0) {
+      if (
+        Object.keys(profilePatch).length > 0 ||
+        gatewayCredentialIds.size > 0
+      ) {
         setSettings((prev) => ({
           ...prev,
-          agents: prev.agents.map((profile) =>
-            profile.id === current.id ? { ...profile, ...profilePatch } : profile,
-          ),
+          gitPat: "",
+          agents: prev.agents.map((profile) => ({
+            ...profile,
+            ...(profile.id === current.id ? profilePatch : {}),
+            ...(gatewayCredentialIds.has(profile.id)
+              ? { gatewayCredentialId: gatewayCredentialIds.get(profile.id) }
+              : {}),
+          })),
         }));
       }
       if (imported.length > 0) refreshCredentials();
@@ -265,9 +488,16 @@ export default function App() {
     let current = true;
     void (async () => {
       const profile = activeAgent(settings);
-      const gitPat = profile.gitCredentialId
-        ? await githubAccessToken(profile.gitCredentialId).catch(() => "")
-        : "";
+      const gatewayTokens = new Map<string, string>();
+      await Promise.all(
+        settings.agents.map(async (candidate) => {
+          if (!candidate.gatewayCredentialId) return;
+          const secret = await credentialVault.getSecret(
+            candidate.gatewayCredentialId,
+          );
+          if (secret) gatewayTokens.set(candidate.id, secret);
+        }),
+      );
       const modelKeys: Record<string, string> = {};
       for (const [keyEnv, id] of Object.entries(
         profile.modelCredentialIds ?? {},
@@ -276,11 +506,16 @@ export default function App() {
         if (secret) modelKeys[keyEnv] = secret;
       }
       if (!current) return;
-      setSettings((prev) =>
-        prev.activeAgentId === profile.id
-          ? { ...prev, gitPat: gitPat ?? "", modelKeys }
-          : prev,
-      );
+      setSettings((prev) => ({
+        ...prev,
+        ...(prev.activeAgentId === profile.id ? { modelKeys } : {}),
+        agents: prev.agents.map((candidate) => {
+          const token = gatewayTokens.get(candidate.id);
+          return token && token !== candidate.token
+            ? { ...candidate, token }
+            : candidate;
+        }),
+      }));
     })();
     return () => {
       current = false;
@@ -289,54 +524,82 @@ export default function App() {
     agent.gitCredentialId,
     agent.id,
     agent.modelCredentialIds,
+    gatewayCredentialSignature,
     legacySecretsMigrated,
     setSettings,
   ]);
 
-  async function selectGitCredential(entry: CredentialEntry) {
-    const token = await githubAccessToken(entry.id);
-    patch({ gitPat: token });
-    patchActiveAgent({ gitCredentialId: entry.id });
-    await loadGithubRepositories(
-      token,
-      entry.kind === "github-token" ? "github-app" : "pat",
-    );
-  }
-
-  async function loadGithubRepositories(
-    token = settings.gitPat,
-    source: "github-app" | "pat" = credentials.find(
-      (entry) => entry.id === agent.gitCredentialId,
-    )?.kind === "git-pat"
-      ? "pat"
-      : "github-app",
-  ) {
-    if (!token.trim()) {
-      setConfigOk(false);
-      setConfigMsg("Connect a GitHub account first.");
-      return;
-    }
+  async function loadGithubRepositoriesForCredential(
+    credentialId: string,
+  ): Promise<AttachedRepository[]> {
     setGithubBusy(true);
     try {
-      const repositories = await listGithubRepositories(token, fetch, source);
+      const token = await githubAccessToken(credentialId);
+      const repositories = await listGithubRepositories(token);
       setGithubRepositories(repositories);
+      setGithubRepositoryCredentialId(credentialId);
       setConfigOk(true);
       setConfigMsg(`Loaded ${repositories.length} GitHub repositories.`);
+      return repositories;
     } catch (err) {
       setConfigOk(false);
       setConfigMsg(
         err instanceof Error ? err.message : "Could not load repositories.",
       );
+      throw err;
     } finally {
       setGithubBusy(false);
     }
   }
 
-  async function connectGithub() {
+  async function selectGitCredential(entry: CredentialEntry) {
+    const repositories = await loadGithubRepositoriesForCredential(
+      entry.id,
+    ).catch(() => null);
+    if (!repositories) return;
+    const accessibleIds = new Set(repositories.map((repo) => repo.id));
+    setSettings((previous) => {
+      const current = activeAgent(previous);
+      return {
+        ...previous,
+        agents: previous.agents.map((profile) =>
+          profile.id === current.id
+            ? {
+                ...profile,
+                gitCredentialId: entry.id,
+                repositories: (profile.repositories ?? []).filter((repo) =>
+                  accessibleIds.has(repo.id),
+                ),
+                runtime: {
+                  ...(profile.runtime ?? {}),
+                  repoUrl: "github.com",
+                },
+              }
+            : profile,
+        ),
+      };
+    });
+  }
+
+  async function loadGithubRepositories() {
+    if (!agent.gitCredentialId) {
+      setConfigOk(false);
+      setConfigMsg("Connect a GitHub account first.");
+      return;
+    }
+    await loadGithubRepositoriesForCredential(agent.gitCredentialId).catch(
+      () => undefined,
+    );
+  }
+
+  async function connectGithub(): Promise<{
+    credential: CredentialEntry;
+    repositories: AttachedRepository[];
+  } | null> {
     if (!GITHUB_CLIENT_ID) {
       setConfigOk(false);
       setConfigMsg("Build the app with EXPO_PUBLIC_GITHUB_CLIENT_ID.");
-      return;
+      return null;
     }
     setGithubBusy(true);
     const authorizationAbort = new AbortController();
@@ -372,28 +635,29 @@ export default function App() {
         fetchGithubIdentity(token),
         listGithubRepositories(token),
       ]);
+      const label = `GitHub — ${identity.login}`;
+      const existing = (await credentialVault.list()).find(
+        (candidate) =>
+          candidate.kind === "github-token" && candidate.label === label,
+      );
       const entry = await credentialVault.save({
+        id: existing?.id,
         kind: "github-token",
-        label: `GitHub — ${identity.login}`,
+        label,
         secret: serializeGithubCredential(githubCredential),
       });
-      patch({ gitPat: token, repoUrl: "github.com" });
-      const accessibleIds = new Set(repositories.map((repo) => repo.id));
-      patchActiveAgent({
-        gitCredentialId: entry.id,
-        repositories: (agent.repositories ?? []).filter((repo) =>
-          accessibleIds.has(repo.id),
-        ),
-      });
       setGithubRepositories(repositories);
-      refreshCredentials();
+      setGithubRepositoryCredentialId(entry.id);
+      await refreshCredentials();
       setConfigOk(true);
       setConfigMsg(`Connected GitHub as ${identity.login}.`);
+      return { credential: entry, repositories };
     } catch (err) {
       setConfigOk(false);
       setConfigMsg(
         err instanceof Error ? err.message : "GitHub connection failed.",
       );
+      return null;
     } finally {
       setGithubBusy(false);
     }
@@ -434,23 +698,22 @@ export default function App() {
     });
   }
 
-  async function saveModelCredential() {
-    const secret = settings.modelKeys[selectedHarness.keyEnv] ?? "";
-    if (!secret.trim()) {
-      setConfigOk(false);
-      setConfigMsg("Enter a model key before saving it to the library.");
-      return;
-    }
-    const entry = await credentialVault.save({
-      kind: "model-key",
-      keyEnv: selectedHarness.keyEnv,
-      label: modelCredentialLabel,
-      secret,
-    });
-    await selectModelCredential(entry);
-    setModelCredentialLabel("");
-    refreshCredentials();
-  }
+  useEffect(() => {
+    if (agent.modelCredentialIds?.[selectedHarness.keyEnv]) return;
+    const latest = [...credentials]
+      .reverse()
+      .find(
+        (entry) =>
+          entry.kind === "model-key" &&
+          entry.keyEnv === selectedHarness.keyEnv,
+      );
+    if (!latest) return;
+    void selectModelCredential(latest);
+  }, [
+    agent.modelCredentialIds,
+    credentials,
+    selectedHarness.keyEnv,
+  ]);
 
   async function removeCredential(entry: CredentialEntry) {
     await credentialVault.remove(entry.id);
@@ -486,22 +749,57 @@ export default function App() {
     if (!configMsg) return;
     const timer = setTimeout(() => {
       setConfigMsg("");
-      setConfigAction(null);
     }, 4_000);
     return () => clearTimeout(timer);
   }, [configMsg]);
 
   useEffect(() => {
-    if (connectionError(conn)) {
+    if (
+      !hydrated ||
+      !legacySecretsMigrated ||
+      !activeAgentConfigured ||
+      session.status !== "ready" ||
+      (agent.desiredState ?? "running") === "stopped"
+    ) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          await persistActiveGatewayToken();
+          await saveConfig(conn, gatewayConfigPatch());
+        } catch (err) {
+          setConfigOk(false);
+          setConfigMsg(
+            err instanceof Error
+              ? err.message
+              : "Could not save agent configuration.",
+          );
+        }
+      })();
+    }, 750);
+    return () => clearTimeout(timer);
+  }, [
+    activeAgentConfigured,
+    agent.desiredState,
+    conn,
+    hydrated,
+    legacySecretsMigrated,
+    session.status,
+    settings,
+  ]);
+
+  useEffect(() => {
+    if (connectionError(conn) || session.status !== "ready") {
       setModelCatalog(null);
       return;
     }
     let cancelled = false;
     setModelCatalog(null);
-    void fetchModelCatalog(conn.gatewayUrl, conn.token, settings.harness)
+    void fetchModelCatalog(conn.gatewayUrl, conn.token, runtime.harness)
       .then((catalog) => {
         if (cancelled) return;
-        if (catalog.harness !== settings.harness) return;
+        if (catalog.harness !== runtime.harness) return;
         setModelCatalog(catalog);
       })
       .catch(() => {
@@ -510,189 +808,370 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [conn, settings.harness]);
-
-  async function onLoadConfig() {
-    setConfigAction("load");
-    setConfigBusy(true);
-    setConfigMsg("");
-    try {
-      const cfg = await fetchConfig(conn);
-      const repositories = cfg.repo.repositories ?? [];
-      setSettings((prev) => ({
-        ...prev,
-        repoUrl: cfg.repo.url,
-        defaultBranch: cfg.repo.defaultBranch ?? "",
-        harness: cfg.harness,
-        model: cfg.model ?? "",
-        effort: cfg.effort ?? "",
-        modelKeys: cfg.modelKeys,
-        stopWord: cfg.voice.stopWord,
-        voiceId: cfg.voice.ttsVoiceId ?? "",
-      }));
-      patchActiveAgent({ repositories });
-      setGithubRepositories((current) => {
-        const byId = new Map(current.map((repo) => [repo.id, repo]));
-        for (const repo of repositories) byId.set(repo.id, repo);
-        return [...byId.values()];
-      });
-      setConfigOk(true);
-      setConfigMsg("Loaded from gateway.");
-    } catch (err) {
-      setConfigOk(false);
-      setConfigMsg(err instanceof Error ? err.message : "Load failed.");
-    } finally {
-      setConfigBusy(false);
-    }
-  }
-
-  async function onSaveConfig() {
-    setConfigAction("save");
-    setConfigBusy(true);
-    setConfigMsg("");
-    try {
-      await saveConfig(conn, gatewayConfigPatch());
-      setConfigOk(true);
-      setConfigMsg("Saved to gateway. Connection fields stay on this device.");
-    } catch (err) {
-      setConfigOk(false);
-      setConfigMsg(err instanceof Error ? err.message : "Save failed.");
-    } finally {
-      setConfigBusy(false);
-    }
-  }
+  }, [conn, runtime.harness, session.status]);
 
   function gatewayConfigPatch(next: DeviceSettings = settings) {
     const profile = activeAgent(next);
-    return {
-      repo: {
-        url: next.repoUrl || "github.com",
-        credential: "",
-        repositories: profile.repositories ?? [],
-        ...(next.defaultBranch.trim()
-          ? { defaultBranch: next.defaultBranch.trim() }
-          : {}),
-      },
-      harness: next.harness,
-      model: next.model,
-      effort: next.effort,
-      modelKeys: next.modelKeys,
-      voice: {
-        stopWord: next.stopWord,
-        ...(next.voiceId.trim()
-          ? { ttsVoiceId: next.voiceId.trim() }
-          : {}),
-      },
-    };
+    return gatewayConfigPatchForProfile(profile, next, next.modelKeys);
   }
 
   function selectModelOverride(id: string) {
     const efforts = catalogModelEfforts(modelCatalog, id);
-    const effort = efforts.includes(settings.effort) ? settings.effort : "";
-    if (settings.model === id && settings.effort === effort) return;
-    const next = { ...settings, model: id, effort };
+    const effort = efforts.includes(runtime.effort) ? runtime.effort : "";
+    if (runtime.model === id && runtime.effort === effort) return;
+    const next = withActiveAgentRuntime(settings, { model: id, effort });
     setSettings(next);
-    void persistModelSelection(next);
   }
 
   function selectEffortOverride(id: string) {
-    if (settings.effort === id) return;
-    const next = { ...settings, effort: id };
+    if (runtime.effort === id) return;
+    const next = withActiveAgentRuntime(settings, { effort: id });
     setSettings(next);
-    void persistModelSelection(next);
   }
 
-  async function persistModelSelection(next: DeviceSettings) {
+  async function persistActiveGatewayToken() {
+    if (!agent.token.trim()) return;
+    const entry = await credentialVault.save({
+      id: agent.gatewayCredentialId,
+      kind: "gateway-token",
+      label: `${agent.name.trim() || "Agent"} gateway`,
+      secret: agent.token,
+    });
+    if (entry.id !== agent.gatewayCredentialId) {
+      patchActiveAgent({ gatewayCredentialId: entry.id });
+    }
+    refreshCredentials();
+  }
+
+  async function stopAgent(profile: AgentProfile) {
+    const managed = sessions[profile.id] ?? EMPTY_SESSION;
+    setLifecycleBusyAgentId(profile.id);
+    patchAgent(profile.id, { desiredState: "stopped" });
+    managed.abort();
+    managed.disconnect();
     try {
-      await saveConfig(conn, gatewayConfigPatch(next));
+      const provider = providerRegistry.forProfile(profile);
+      if (profile.origin?.kind === "provider" && !provider) {
+        throw new Error(
+          `Provider ${profile.origin.providerId ?? "unknown"} is not installed.`,
+        );
+      }
+      if (provider) {
+        await provider.stopAgent(profile);
+      } else {
+        const result = await resetSession(
+          connectionFor(profile, settings.userId),
+        );
+        if (!result.restarting) {
+          throw new Error(
+            "This host cannot recreate the session. Configure its container supervisor, then try again.",
+          );
+        }
+      }
     } catch (err) {
+      patchAgent(profile.id, { desiredState: "running" });
       setConfigOk(false);
-      setConfigMsg(err instanceof Error ? err.message : "Save failed.");
+      setConfigMsg(err instanceof Error ? err.message : "Could not end session.");
+    } finally {
+      setLifecycleBusyAgentId(null);
     }
   }
 
-  async function connectActiveSession() {
+  async function startAgent(profile: AgentProfile) {
+    setLifecycleBusyAgentId(profile.id);
     try {
-      await saveConfig(conn, gatewayConfigPatch());
-      session.connect(mode);
+      const provider = providerRegistry.forProfile(profile);
+      if (profile.origin?.kind === "provider" && !provider) {
+        throw new Error(
+          `Provider ${profile.origin.providerId ?? "unknown"} is not installed.`,
+        );
+      }
+      if (provider) {
+        patchAgent(profile.id, { desiredState: "running" });
+        try {
+          await provider.startAgent(profile);
+        } catch (err) {
+          patchAgent(profile.id, { desiredState: "stopped" });
+          throw err;
+        }
+      }
+      await saveConfig(
+        connectionFor(profile, settings.userId),
+        gatewayConfigPatch(),
+      );
+      if (!provider) {
+        patchAgent(profile.id, { desiredState: "running" });
+      }
     } catch (err) {
       setConfigOk(false);
       setConfigMsg(
-        err instanceof Error ? err.message : "Could not prepare the agent.",
+        err instanceof Error ? err.message : "Could not start a new session.",
       );
-      setTab("settings");
+    } finally {
+      setLifecycleBusyAgentId(null);
     }
   }
 
-  function onKillSession() {
+  async function replaceAgent(profile: AgentProfile) {
+    setLifecycleBusyAgentId(profile.id);
+    try {
+      const provider = providerRegistry.forProfile(profile);
+      if (!provider?.replaceAgent) {
+        throw new Error("This provider cannot replace a removed deployment.");
+      }
+      const replacement = await provider.replaceAgent(profile);
+      await saveConfig(
+        {
+          ...connectionFor(profile, settings.userId),
+          gatewayUrl: replacement.gatewayUrl,
+        },
+        gatewayConfigPatch(),
+      );
+      setConfigOk(true);
+      setConfigMsg("Replacement deployment is online.");
+    } catch (err) {
+      setConfigOk(false);
+      setConfigMsg(
+        err instanceof Error
+          ? err.message
+          : "Could not launch a replacement deployment.",
+      );
+    } finally {
+      setLifecycleBusyAgentId(null);
+    }
+  }
+
+  function toggleAgentLifecycle(profile: AgentProfile) {
+    const desiredState = profile.desiredState ?? "running";
+    if (desiredState === "stopped") {
+      void startAgent(profile);
+      return;
+    }
+    const managed = sessions[profile.id] ?? EMPTY_SESSION;
+    const run = () => void stopAgent(profile);
+    if (!managed.working && !managed.speaking) {
+      run();
+      return;
+    }
     Alert.alert(
-      "Kill agent session?",
-      "This aborts the harness and stops its process. Uncommitted work in this session is lost.",
+      "End this session?",
+      "The current instance will be destroyed. Uncommitted and unpushed work will be lost.",
       [
         { text: "Cancel", style: "cancel" },
-        {
-          text: "Kill",
-          style: "destructive",
-          onPress: () => {
-            void (async () => {
-              session.abort();
-              session.disconnect();
-              try {
-                const result = await killSession(conn);
-                setConfigOk(true);
-                setConfigMsg(
-                  result.killed > 0
-                    ? `Killed ${result.killed} session${result.killed === 1 ? "" : "s"}.`
-                    : "Session torn down.",
-                );
-              } catch (err) {
-                setConfigOk(false);
-                setConfigMsg(
-                  err instanceof Error ? err.message : "Kill failed.",
-                );
-              }
-            })();
-          },
-        },
+        { text: "End session", style: "destructive", onPress: run },
       ],
     );
   }
 
-  function onNewSession() {
-    Alert.alert(
-      "New session?",
-      "The agent container exits and is recreated fresh from its image: clean disk, clean memory, new git clone. Anything not pushed is lost. Reconnect in ~10–30s.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "New session",
-          style: "destructive",
-          onPress: () => {
-            void (async () => {
-              session.abort();
-              try {
-                await saveConfig(conn, gatewayConfigPatch());
-                const result = await resetSession(conn);
-                setConfigOk(true);
-                setConfigMsg(
-                  result.restarting
-                    ? "Agent is restarting fresh. Reconnecting automatically."
-                    : "Sessions closed; gateway did not restart (no onReset).",
-                );
-              } catch (err) {
-                setConfigOk(false);
-                setConfigMsg(
-                  err instanceof Error ? err.message : "Reset failed.",
-                );
-              }
-            })();
-          },
-        },
-      ],
-    );
-  }
+  const activeDisplayState = agentDisplayState(agent, session);
+  const firstLaunch = isBlankDefaultProfile(settings.agents);
+  const talkState = resolveTalkState(
+    activeDisplayState,
+    session.speaking,
+    session.working,
+    pttHeld,
+  );
+  const editingAgent =
+    settings.agents.find((profile) => profile.id === editingAgentId) ?? null;
+  const editingSession = editingAgent
+    ? sessions[editingAgent.id] ?? EMPTY_SESSION
+    : EMPTY_SESSION;
+  const editingProvider = editingAgent
+    ? providerRegistry.forProfile(editingAgent)
+    : undefined;
+  const editingTrayItem = editingAgent
+    ? agentTrayItem(
+        editingAgent,
+        editingSession,
+        settings,
+        editingProvider?.hostLabel(editingAgent),
+      )
+    : null;
+  const setupProvider =
+    agentSetupScreen?.startsWith("provider:")
+      ? providerRegistry.get(agentSetupScreen.slice("provider:".length))
+      : undefined;
+  const editingDeleteConfirmation =
+    editingAgent && editingProvider
+      ? editingProvider.deleteConfirmation(editingAgent)
+      : {
+          title: "Remove this agent?",
+          message:
+            "This removes the saved connection from this phone. It does not stop or delete the existing host.",
+          actionLabel: "Remove from phone",
+        };
 
-  const talkState = resolveTalkState(session.status, session.speaking, pttHeld);
+  useEffect(() => {
+    if (!editingAgent?.token.trim()) return;
+    const timer = setTimeout(() => {
+      void credentialVault
+        .save({
+          id: editingAgent.gatewayCredentialId,
+          kind: "gateway-token",
+          label: `${editingAgent.name.trim() || "Agent"} gateway`,
+          secret: editingAgent.token,
+        })
+        .then((entry) => {
+          if (entry.id !== editingAgent.gatewayCredentialId) {
+            setSettings((previous) => ({
+              ...previous,
+              agents: previous.agents.map((profile) =>
+                profile.id === editingAgent.id
+                  ? { ...profile, gatewayCredentialId: entry.id }
+                  : profile,
+              ),
+            }));
+          }
+          refreshCredentials();
+        })
+        .catch((err) => {
+          setConfigOk(false);
+          setConfigMsg(
+            err instanceof Error ? err.message : "Could not save gateway token.",
+          );
+        });
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [
+    editingAgent?.gatewayCredentialId,
+    editingAgent?.id,
+    editingAgent?.name,
+    editingAgent?.token,
+    refreshCredentials,
+  ]);
+
+  const agentConfiguration = (
+    <>
+      <SectionLabel icon={<MicIcon size={13} color={color.textMuted} />}>
+        Agent runtime
+      </SectionLabel>
+      <View style={styles.harnessGrid}>
+        {HARNESSES.map((h) => {
+          const active = runtime.harness === h.id;
+          return (
+            <Pressable
+              key={h.id}
+              accessibilityRole="radio"
+              accessibilityState={{ selected: active }}
+              accessibilityLabel={h.label}
+              onPress={() =>
+                setSettings((prev) =>
+                  updateAgentHarness(prev, activeAgent(prev).id, h.id),
+                )
+              }
+              style={[
+                styles.harnessCard,
+                active && styles.harnessCardActive,
+              ]}
+            >
+              <View style={styles.harnessTop}>
+                <Text
+                  style={[
+                    styles.harnessLabel,
+                    active && styles.harnessLabelActive,
+                  ]}
+                >
+                  {h.label}
+                </Text>
+                {active ? <CheckIcon size={14} color={color.accent} /> : null}
+              </View>
+              <Text style={styles.harnessEnv}>{h.keyEnv}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
+      {modelCatalog && modelCatalog.models.length > 0 ? (
+        <ModelEffortPills
+          catalog={modelCatalog}
+          model={runtime.model}
+          effort={runtime.effort}
+          onSelectModel={selectModelOverride}
+          onSelectEffort={selectEffortOverride}
+        />
+      ) : null}
+      {credentials.every(
+        (entry) =>
+          entry.kind !== "model-key" ||
+          entry.keyEnv !== selectedHarness.keyEnv,
+      ) ? (
+        <Card>
+          <Text style={styles.note}>
+            {`${selectedHarness.label} needs an API key from App Settings.`}
+          </Text>
+          <Button
+            tone="neutral"
+            label="Open App Settings"
+            onPress={() => setShowAppSettings(true)}
+          />
+        </Card>
+      ) : null}
+
+      <SectionLabel icon={<LinkIcon size={13} color={color.textMuted} />}>
+        Startup repositories
+      </SectionLabel>
+      <GithubRepositoryPicker
+        credentials={credentials.filter(
+          (entry) =>
+            entry.kind === "github-token" || entry.kind === "git-pat",
+        )}
+        selectedCredentialId={agent.gitCredentialId}
+        repositories={githubRepositories}
+        selectedRepositories={agent.repositories ?? []}
+        busy={githubBusy}
+        search={githubSearch}
+        onSearchChange={setGithubSearch}
+        onManageAccounts={() => setShowAppSettings(true)}
+        onSelectCredential={(entry) =>
+          void selectGitCredential(entry).catch(() => undefined)
+        }
+        onRefresh={() => void loadGithubRepositories()}
+        onToggleRepository={toggleRepository}
+      />
+      <Text style={styles.note}>
+        Startup repository changes apply the next time you start a session; they
+        do not require a new Railway deployment.
+      </Text>
+      {!GITHUB_CLIENT_ID ? (
+        <Text style={styles.githubConfigWarning}>
+          This app build is missing its GitHub OAuth client ID.
+        </Text>
+      ) : null}
+
+      <SectionLabel icon={<WaveIcon size={13} color={color.textMuted} />}>
+        Voice
+      </SectionLabel>
+      <Card>
+        <Field
+          label="Stop word"
+          value={runtime.stopWord}
+          onChange={(v) => patchActiveAgentRuntime({ stopWord: v })}
+          placeholder="hard stop"
+          hint="Say this at any time to stop the current response."
+        />
+        <Field
+          label="ElevenLabs voice ID"
+          value={runtime.voiceId}
+          onChange={(v) => patchActiveAgentRuntime({ voiceId: v })}
+          autoCapitalize="none"
+          mono
+          placeholder="Gateway default"
+        />
+      </Card>
+
+      <SectionLabel>Advanced</SectionLabel>
+      <Card>
+        <Field
+          label="Device user ID"
+          value={settings.userId}
+          onChange={(value) => patch({ userId: value })}
+          autoCapitalize="none"
+          mono
+          placeholder="default"
+          hint="Used for sessions from this device across all agents."
+        />
+      </Card>
+    </>
+  );
 
   return (
     <View style={styles.root}>
@@ -701,87 +1180,161 @@ export default function App() {
         <VoiceSessionController
           key={profile.id}
           profile={profile}
+          settings={settings}
+          credentials={credentials}
           userId={settings.userId}
           focused={profile.id === settings.activeAgentId}
+          mode={mode}
+          lifecycleBusy={lifecycleBusyAgentId === profile.id}
           onChange={reportSession}
         />
       ))}
 
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.wordmark}>agent_tts</Text>
-          <Text style={styles.tagline}>
-            {describeTarget(settings, session.harness, activeModelLabel)}
-          </Text>
-        </View>
-        <StatusPill
-          label={statusLabel(session.status, session.speaking)}
-          tone={statusTone(session.status, session.speaking)}
-          pulsing={
-            session.status === "connecting" ||
-            session.status === "provisioning" ||
-            session.speaking
-          }
+      {showAppSettings ? (
+        <AppSettingsScreen
+          sttProviderId={sttProviderId}
+          ttsProviderId={ttsProviderId}
+          onBack={() => setShowAppSettings(false)}
+          onSaved={async (patch) => {
+            setSettings((previous) => ({
+              ...previous,
+              sttProviderId: patch.sttProviderId,
+              ttsProviderId: patch.ttsProviderId,
+            }));
+            await refreshCredentials();
+            setConfigOk(true);
+            setConfigMsg("App credentials saved on this phone.");
+          }}
+          githubCredentials={credentials.filter(
+            (entry) =>
+              entry.kind === "github-token" || entry.kind === "git-pat",
+          )}
+          githubBusy={githubBusy}
+          onConnectGithub={async () => {
+            await connectGithub();
+          }}
+          onRemoveGithubCredential={(entry) => void removeCredential(entry)}
         />
+      ) : editingAgent && editingTrayItem ? (
+        <AgentDetailScreen
+          name={editingAgent.name}
+          gatewayUrl={editingAgent.gatewayUrl}
+          token={editingAgent.token}
+          hostLabel={
+            editingProvider?.hostLabel(editingAgent) ?? "Existing host"
+          }
+          statusLabel={trayStatusLabel(editingTrayItem.status)}
+          statusTone={trayStatusTone(editingTrayItem.status)}
+          running={(editingAgent.desiredState ?? "running") === "running"}
+          gone={editingTrayItem.status === "gone"}
+          lifecycleBusy={lifecycleBusyAgentId === editingAgent.id}
+          removing={removingAgentId === editingAgent.id}
+          configuration={agentConfiguration}
+          onNameChange={(name) => patchAgent(editingAgent.id, { name })}
+          onGatewayUrlChange={(gatewayUrl) =>
+            patchAgent(editingAgent.id, { gatewayUrl })
+          }
+          onTokenChange={(token) => patchAgent(editingAgent.id, { token })}
+          onLifecycle={() => toggleAgentLifecycle(editingAgent)}
+          onReplace={() => void replaceAgent(editingAgent)}
+          onRemove={() =>
+            Alert.alert(
+              editingDeleteConfirmation.title,
+              editingDeleteConfirmation.message,
+              [
+                { text: "Cancel", style: "cancel" },
+                {
+                  text: editingDeleteConfirmation.actionLabel,
+                  style: "destructive",
+                  onPress: () => void removeAgent(editingAgent),
+                },
+              ],
+            )
+          }
+          onBack={() => setEditingAgentId(null)}
+        />
+      ) : agentSetupScreen ? (
+        agentSetupScreen === "choose" ? (
+          <AddAgentScreen
+            onBack={() => setAgentSetupScreen(null)}
+            providers={providerRegistry.providers.map(
+              (provider) => provider.definition,
+            )}
+            onProvider={(providerId) => {
+              const provider = providerRegistry.get(providerId);
+              if (!provider) return;
+              provider.prepareSetup();
+              setAgentSetupScreen(`provider:${providerId}`);
+            }}
+            onManual={() => {
+              setManualName("");
+              setManualGatewayUrl("");
+              setManualGatewayToken("");
+              setAgentSetupScreen("manual");
+            }}
+          />
+        ) : agentSetupScreen === "manual" ? (
+          <ManualAgentScreen
+            name={manualName}
+            gatewayUrl={manualGatewayUrl}
+            token={manualGatewayToken}
+            busy={manualBusy}
+            onNameChange={setManualName}
+            onGatewayUrlChange={setManualGatewayUrl}
+            onTokenChange={setManualGatewayToken}
+            onScan={() => setAgentSetupScreen("scan")}
+            onSave={() => void saveManualAgent()}
+            onBack={() => setAgentSetupScreen("choose")}
+          />
+        ) : agentSetupScreen === "scan" ? (
+          <PairingScannerScreen
+            onScanned={handleScannedPairing}
+            onBack={() => setAgentSetupScreen("manual")}
+          />
+        ) : setupProvider ? (
+          setupProvider.renderSetup(() => setAgentSetupScreen("choose"))
+        ) : null
+      ) : (
+        <>
+      <View style={styles.header}>
+        <View style={styles.headerSide} />
+        <BrandIcon size={36} />
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="App settings"
+          hitSlop={10}
+          onPress={() => setShowAppSettings(true)}
+          style={styles.headerSide}
+        >
+          <GearIcon size={22} color={color.textMuted} />
+        </Pressable>
       </View>
 
       {configMsg ? <Toast message={configMsg} ok={configOk} /> : null}
 
-      {tab === "talk" ? (
-        <View style={styles.screen}>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.sessionSwitcher}
-            style={styles.sessionSwitcherScroll}
-          >
-            {settings.agents.map((profile) => {
-              const profileSession = sessions[profile.id] ?? EMPTY_SESSION;
-              const selected = profile.id === settings.activeAgentId;
-              return (
-                <Pressable
-                  key={profile.id}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected }}
-                  accessibilityLabel={`Switch to ${sessionDisplayName(
-                    profile,
-                    profileSession.harness || settings.harness,
-                  )}`}
-                  onPress={() => selectAgent(profile.id)}
-                  style={[
-                    styles.sessionChip,
-                    selected && styles.sessionChipActive,
-                  ]}
-                >
-                  <View
-                    style={[
-                      styles.sessionDot,
-                      {
-                        backgroundColor: sessionStatusColor(profileSession),
-                      },
-                    ]}
-                  />
-                  <Text
-                    numberOfLines={1}
-                    style={[
-                      styles.sessionChipText,
-                      selected && styles.sessionChipTextActive,
-                    ]}
-                  >
-                    {sessionDisplayName(
-                      profile,
-                      profileSession.harness || settings.harness,
-                    )}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
+      <View style={styles.screen}>
+          <AgentTray
+            agents={settings.agents
+              .filter((profile) => !firstLaunch || profile.id !== agent.id)
+              .map((profile) =>
+                agentTrayItem(
+                  profile,
+                  sessions[profile.id] ?? EMPTY_SESSION,
+                  settings,
+                  providerRegistry.forProfile(profile)?.hostLabel(profile),
+                ),
+              )}
+            activeAgentId={settings.activeAgentId}
+            onSelect={editAgent}
+            onOpenMenu={openAgentMenu}
+            onAdd={addAgent}
+          />
 
+          {!firstLaunch ? (
+            <>
           <Segmented<VoiceMode>
             value={mode}
             onChange={setMode}
-            disabled={connected}
             options={[
               {
                 value: "ptt",
@@ -806,18 +1359,14 @@ export default function App() {
             ]}
           />
 
-          {session.provisioning ? (
-            <Card style={styles.provisioningCard}>
-              <Text style={styles.provisioningTitle}>Preparing workspace</Text>
-              <Text style={styles.provisioningDetail}>
-                {provisioningLabel(session.provisioning)}
-              </Text>
-            </Card>
-          ) : null}
-
           <TalkButton
             mode={mode}
             state={talkState}
+            detail={
+              session.provisioning
+                ? provisioningLabel(session.provisioning)
+                : undefined
+            }
             onPressIn={() => {
               setPttHeld(true);
               session.pttStart();
@@ -828,510 +1377,60 @@ export default function App() {
             }}
           />
 
-          <Button
-            tone={connected ? "neutral" : "primary"}
-            label={connectLabel(session.status)}
-            icon={
-              <PowerIcon
-                size={18}
-                color={connected ? color.text : color.bg}
-              />
-            }
-            onPress={() => {
-              if (connected) session.disconnect();
-              else void connectActiveSession();
-            }}
-          />
-
-          <View style={styles.actionRow}>
+          {session.working || session.speaking ? (
             <Button
-              style={styles.actionItem}
               tone="ghost"
-              label="Stop"
-              accessibilityHint="Aborts the current turn without closing the session."
-              disabled={session.status !== "ready"}
+              label="Stop current response"
+              accessibilityHint="Aborts the current response without ending the session."
               icon={<StopIcon size={15} color={color.textMuted} />}
               onPress={() => session.abort()}
-            />
-            <Button
-              style={styles.actionItem}
-              tone="ghost"
-              label="Kill session"
-              accessibilityHint="Aborts the harness and stops its process."
-              icon={<StopIcon size={15} color={color.textMuted} />}
-              onPress={onKillSession}
-            />
-            <Button
-              style={styles.actionItem}
-              tone="danger"
-              label="New session"
-              accessibilityHint="Restarts the agent container from a clean image."
-              icon={<TrashIcon size={16} color={color.danger} />}
-              onPress={onNewSession}
-            />
-          </View>
-
-          {modelCatalog && modelCatalog.models.length > 0 ? (
-            <ModelEffortPills
-              catalog={modelCatalog}
-              model={settings.model}
-              effort={settings.effort}
-              onSelectModel={selectModelOverride}
-              onSelectEffort={selectEffortOverride}
             />
           ) : null}
 
           <View style={styles.feed}>
+            <Text style={styles.transcriptAgent}>
+              {sessionDisplayName(
+                agent,
+                session.harness || resolveAgentRuntimeSettings(agent, settings).harness,
+              )}
+            </Text>
             <Transcript events={session.events} />
           </View>
-        </View>
-      ) : (
-        <KeyboardAvoidingView
-          style={styles.screen}
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
-          keyboardVerticalOffset={inset.top}
-        >
-          <ScrollView
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={styles.settingsContent}
-          >
-            <SectionLabel icon={<LinkIcon size={13} color={color.textMuted} />}>
-              Agents
-            </SectionLabel>
-            <Card>
-              <View style={styles.agentList}>
-                {settings.agents.map((profile) => {
-                  const selected = profile.id === settings.activeAgentId;
-                  const canDelete = settings.agents.length > 1;
-                  return (
-                    <Pressable
-                      key={profile.id}
-                      accessibilityRole="radio"
-                      accessibilityState={{ selected }}
-                      accessibilityLabel={sessionDisplayName(
-                        profile,
-                        sessions[profile.id]?.harness || settings.harness,
-                      )}
-                      onPress={() => selectAgent(profile.id)}
-                      style={[
-                        styles.agentRow,
-                        selected && styles.agentRowActive,
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.agentRowName,
-                          selected && styles.agentRowNameActive,
-                        ]}
-                        numberOfLines={1}
-                      >
-                        {sessionDisplayName(
-                          profile,
-                          sessions[profile.id]?.harness || settings.harness,
-                        )}
-                      </Text>
-                      {selected ? (
-                        <CheckIcon size={14} color={color.accent} />
-                      ) : null}
-                      {canDelete ? (
-                        <Pressable
-                          accessibilityRole="button"
-                          accessibilityLabel={`Delete ${profile.name}`}
-                          hitSlop={8}
-                          onPress={() => removeAgent(profile.id)}
-                          style={styles.agentDelete}
-                        >
-                          <TrashIcon size={15} color={color.danger} />
-                        </Pressable>
-                      ) : null}
-                    </Pressable>
-                  );
-                })}
-              </View>
-              <Button
-                tone="neutral"
-                label="Add agent"
-                onPress={addAgent}
-                style={styles.agentAdd}
-              />
-              <Field
-                label="Project name"
-                value={agent.name}
-                onChange={(v) => patchActiveAgent({ name: v })}
-                placeholder="Project 1"
-              />
-              <Field
-                label="Gateway URL"
-                value={agent.gatewayUrl}
-                onChange={(v) => patchActiveAgent({ gatewayUrl: v })}
-                autoCapitalize="none"
-                mono
-                placeholder="https://your-host.example.com"
-              />
-              <Field
-                label="Gateway token"
-                value={agent.token}
-                onChange={(v) => patchActiveAgent({ token: v })}
-                secure
-                autoCapitalize="none"
-              />
-              <Field
-                label="User id"
-                value={settings.userId}
-                onChange={(v) => patch({ userId: v })}
-                autoCapitalize="none"
-                mono
-                placeholder="default"
-              />
-              <Button
-                tone="neutral"
-                busy={configBusy && configAction === "load"}
-                label={
-                  configBusy && configAction === "load"
-                    ? "Loading…"
-                    : "Load config"
-                }
-                icon={<DownloadIcon size={17} color={color.text} />}
-                onPress={() => void onLoadConfig()}
-              />
-              <Text style={styles.note}>
-                {hydrated
-                  ? "Connection fields stay on this device. Everything below is stored by the gateway."
-                  : "Loading device settings…"}
+            </>
+          ) : (
+            <View style={styles.firstLaunch}>
+              <Text style={styles.firstLaunchTitle}>Add your first agent</Text>
+              <Text style={styles.firstLaunchDetail}>
+                Save the required voice provider keys in Settings, then launch
+                an agent in your provider account or connect a host you already
+                run.
               </Text>
-            </Card>
-
-            <SectionLabel icon={<LinkIcon size={13} color={color.textMuted} />}>
-              GitHub repositories
-            </SectionLabel>
-            <Card>
-              <Button
-                tone={selectedGitCredential ? "neutral" : "primary"}
-                busy={githubBusy}
-                label={
-                  githubBusy
-                    ? "Waiting for GitHub…"
-                    : selectedGitCredential?.kind === "github-token"
-                      ? selectedGitCredential.label
-                      : "Connect GitHub"
-                }
-                onPress={() => void connectGithub()}
-              />
-              <CredentialPicker
-                entries={credentials.filter(
-                  (entry) =>
-                    entry.kind === "github-token" || entry.kind === "git-pat",
-                )}
-                selectedId={agent.gitCredentialId}
-                onSelect={(entry) => void selectGitCredential(entry)}
-                onRemove={(entry) => void removeCredential(entry)}
-                emptyLabel="No GitHub accounts connected."
-              />
-              <View style={styles.repositoryHeader}>
-                <Text style={styles.repositoryCount}>
-                  {(agent.repositories ?? []).length} selected
-                </Text>
-                <Button
-                  tone="ghost"
-                  busy={githubBusy}
-                  disabled={!settings.gitPat}
-                  label="Refresh"
-                  onPress={() => void loadGithubRepositories()}
-                />
-              </View>
-              {GITHUB_APP_SLUG ? (
-                <Button
-                  tone="ghost"
-                  label="Manage GitHub repository access"
-                  onPress={() =>
-                    void Linking.openURL(
-                      `https://github.com/apps/${encodeURIComponent(
-                        GITHUB_APP_SLUG,
-                      )}/installations/new`,
-                    )
-                  }
-                />
-              ) : null}
-              {githubRepositories.length > 0 ? (
-                <Field
-                  label="Filter repositories"
-                  value={githubSearch}
-                  onChange={setGithubSearch}
-                  autoCapitalize="none"
-                  placeholder="owner or repository"
-                />
-              ) : null}
-              {githubRepositories.length > 0 ? (
-                <View style={styles.repositoryList}>
-                  {visibleGithubRepositories.map((repository) => {
-                    const selected = (agent.repositories ?? []).some(
-                      (item) => item.id === repository.id,
-                    );
-                    return (
-                      <Pressable
-                        key={repository.id}
-                        accessibilityRole="checkbox"
-                        accessibilityState={{ checked: selected }}
-                        onPress={() => toggleRepository(repository)}
-                        style={[
-                          styles.repositoryRow,
-                          selected && styles.repositoryRowSelected,
-                        ]}
-                      >
-                        <View style={styles.repositoryText}>
-                          <Text
-                            style={[
-                              styles.repositoryName,
-                              selected && styles.repositoryNameSelected,
-                            ]}
-                            numberOfLines={1}
-                          >
-                            {repository.fullName}
-                          </Text>
-                          <Text style={styles.repositoryVisibility}>
-                            {repository.private ? "Private" : "Public"}
-                          </Text>
-                        </View>
-                        {selected ? (
-                          <CheckIcon size={15} color={color.accent} />
-                        ) : null}
-                      </Pressable>
-                    );
-                  })}
-                </View>
-              ) : (
-                <Text style={styles.note}>
-                  {selectedGitCredential
-                    ? "No repositories returned. Grant this GitHub App repository access, then refresh."
-                    : "Connect GitHub to choose the repositories cloned into this container before voice becomes available."}
-                </Text>
-              )}
-              <Text style={styles.note}>
-                Selection applies to this agent. Save it, then start a new
-                session to provision a fresh workspace.
-              </Text>
-              {!GITHUB_CLIENT_ID ? (
-                <Text style={styles.githubConfigWarning}>
-                  EXPO_PUBLIC_GITHUB_CLIENT_ID is missing from this app build.
-                </Text>
-              ) : null}
-            </Card>
-
-            <SectionLabel icon={<MicIcon size={13} color={color.textMuted} />}>
-              Harness
-            </SectionLabel>
-            <View style={styles.harnessGrid}>
-              {HARNESSES.map((h) => {
-                const active = settings.harness === h.id;
-                return (
-                  <Pressable
-                    key={h.id}
-                    accessibilityRole="radio"
-                    accessibilityState={{ selected: active }}
-                    accessibilityLabel={h.label}
-                    onPress={() =>
-                      setSettings((prev) => withHarness(prev, h.id))
-                    }
-                    style={[
-                      styles.harnessCard,
-                      active && styles.harnessCardActive,
-                    ]}
-                  >
-                    <View style={styles.harnessTop}>
-                      <Text
-                        style={[
-                          styles.harnessLabel,
-                          active && styles.harnessLabelActive,
-                        ]}
-                      >
-                        {h.label}
-                      </Text>
-                      {active ? (
-                        <CheckIcon size={14} color={color.accent} />
-                      ) : null}
-                    </View>
-                    <Text style={styles.harnessEnv}>{h.keyEnv}</Text>
-                  </Pressable>
-                );
-              })}
             </View>
-            <Card>
-              <Field
-                label={`${selectedHarness.label} API key`}
-                value={settings.modelKeys[selectedHarness.keyEnv] ?? ""}
-                onChange={(v) =>
-                  setSettings((prev) => ({
-                    ...prev,
-                    modelKeys: {
-                      ...prev.modelKeys,
-                      [selectedHarness.keyEnv]: v,
-                    },
-                  }))
-                }
-                secure
-                autoCapitalize="none"
-                hint={`Sent to the box as ${selectedHarness.keyEnv}.`}
-              />
-              <Field
-                label="Key label"
-                value={modelCredentialLabel}
-                onChange={setModelCredentialLabel}
-                placeholder={`${selectedHarness.label} — personal`}
-              />
-              <Button
-                tone="neutral"
-                label="Save key to device library"
-                onPress={() => void saveModelCredential()}
-              />
-              <CredentialPicker
-                entries={credentials.filter(
-                  (entry) =>
-                    entry.kind === "model-key" &&
-                    entry.keyEnv === selectedHarness.keyEnv,
-                )}
-                selectedId={
-                  agent.modelCredentialIds?.[selectedHarness.keyEnv]
-                }
-                onSelect={(entry) => void selectModelCredential(entry)}
-                onRemove={(entry) => void removeCredential(entry)}
-                emptyLabel={`No saved ${selectedHarness.label} keys yet.`}
-              />
-            </Card>
-
-            <SectionLabel icon={<WaveIcon size={13} color={color.textMuted} />}>
-              Voice
-            </SectionLabel>
-            <Card>
-              <Field
-                label="Stop word"
-                value={settings.stopWord}
-                onChange={(v) => patch({ stopWord: v })}
-                placeholder="hard stop"
-                hint="Say this at any time to abort the current turn."
-              />
-              <Field
-                label="ElevenLabs voice id"
-                value={settings.voiceId}
-                onChange={(v) => patch({ voiceId: v })}
-                autoCapitalize="none"
-                mono
-                placeholder="Gateway default"
-              />
-            </Card>
-          </ScrollView>
-
-          <View style={styles.saveBar}>
-            <Button
-              tone="primary"
-              busy={configBusy && configAction === "save"}
-              label={
-                configBusy && configAction === "save"
-                  ? "Saving…"
-                  : "Save to gateway"
-              }
-              icon={<UploadIcon size={18} color={color.bg} />}
-              onPress={() => void onSaveConfig()}
-            />
-          </View>
-        </KeyboardAvoidingView>
-      )}
-
-      <View style={styles.tabBar}>
-        <TabItem
-          label="Talk"
-          active={tab === "talk"}
-          onPress={() => setTab("talk")}
-          icon={
-            <MicIcon
-              size={22}
-              color={tab === "talk" ? color.accent : color.textDim}
-            />
-          }
-        />
-        <TabItem
-          label="Settings"
-          active={tab === "settings"}
-          onPress={() => setTab("settings")}
-          icon={
-            <GearIcon
-              size={22}
-              color={tab === "settings" ? color.accent : color.textDim}
-            />
-          }
-        />
+          )}
       </View>
-    </View>
-  );
-}
-
-function CredentialPicker({
-  entries,
-  selectedId,
-  onSelect,
-  onRemove,
-  emptyLabel,
-}: {
-  entries: CredentialEntry[];
-  selectedId?: string;
-  onSelect: (entry: CredentialEntry) => void;
-  onRemove: (entry: CredentialEntry) => void;
-  emptyLabel: string;
-}) {
-  if (entries.length === 0) {
-    return <Text style={styles.note}>{emptyLabel}</Text>;
-  }
-  return (
-    <View style={styles.credentialList}>
-      {entries.map((entry) => {
-        const selected = entry.id === selectedId;
-        return (
-          <Pressable
-            key={entry.id}
-            accessibilityRole="radio"
-            accessibilityState={{ selected }}
-            accessibilityLabel={entry.label}
-            onPress={() => onSelect(entry)}
-            style={[
-              styles.credentialRow,
-              selected && styles.credentialRowActive,
-            ]}
-          >
-            <Text
-              numberOfLines={1}
-              style={[
-                styles.credentialName,
-                selected && styles.credentialNameActive,
-              ]}
-            >
-              {entry.label}
-            </Text>
-            {selected ? <CheckIcon size={14} color={color.accent} /> : null}
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={`Delete ${entry.label}`}
-              hitSlop={8}
-              onPress={() => onRemove(entry)}
-              style={styles.agentDelete}
-            >
-              <TrashIcon size={15} color={color.danger} />
-            </Pressable>
-          </Pressable>
-        );
-      })}
+        </>
+      )}
     </View>
   );
 }
 
 function VoiceSessionController({
   profile,
+  settings,
+  credentials,
   userId,
   focused,
+  mode,
+  lifecycleBusy,
   onChange,
 }: {
   profile: AgentProfile;
+  settings: DeviceSettings;
+  credentials: CredentialEntry[];
   userId: string;
   focused: boolean;
+  mode: VoiceMode;
+  lifecycleBusy: boolean;
   onChange: (id: string, session: ManagedSession) => void;
 }) {
   const conn = useMemo(
@@ -1349,20 +1448,35 @@ function VoiceSessionController({
         : Promise.resolve(""),
     [profile.gitCredentialId],
   );
+  const saveConfigBeforeConnect = useCallback(async () => {
+    const modelKeys = await resolveProfileModelKeys(
+      profile,
+      settings,
+      credentials,
+    );
+    await saveConfig(
+      conn,
+      gatewayConfigPatchForProfile(profile, settings, modelKeys),
+    );
+  }, [conn, credentials, profile, settings]);
   const session = useVoiceSession(conn, {
     profileId: profile.id,
     focused,
+    managedHost: profile.origin?.kind === "provider",
+    saveConfigBeforeConnect,
     getGitCredential,
   });
   const managed = useMemo<ManagedSession>(
     () => ({ ...session }),
     [
       session.abort,
+      session.availability,
       session.connect,
       session.disconnect,
       session.events,
       session.generationId,
       session.harness,
+      session.lastError,
       session.pttEnd,
       session.pttStart,
       session.provisioning,
@@ -1376,51 +1490,64 @@ function VoiceSessionController({
     onChange(profile.id, managed);
   }, [managed, onChange, profile.id]);
 
+  useEffect(() => {
+    const shouldRun =
+      (profile.desiredState ?? "running") === "running" &&
+      providerAllowsSessionConnection(profile) &&
+      !lifecycleBusy &&
+      session.availability !== "gone" &&
+      !connectionError(conn);
+    if (!shouldRun) {
+      if (session.status !== "disconnected") session.disconnect();
+      return;
+    }
+    if (session.status !== "disconnected") return;
+    const timer = setTimeout(
+      () => session.connect(mode),
+      session.lastError ? 15_000 : 0,
+    );
+    return () => clearTimeout(timer);
+  }, [
+    conn,
+    lifecycleBusy,
+    mode,
+    profile.desiredState,
+    profile.origin?.kind,
+    profile.origin?.provisioningPhase,
+    session.availability,
+    session.connect,
+    session.disconnect,
+    session.lastError,
+    session.status,
+  ]);
+
+  const previousModeRef = useRef(mode);
+  useEffect(() => {
+    if (!focused || previousModeRef.current === mode) return;
+    previousModeRef.current = mode;
+    if (session.status === "ready") session.connect(mode);
+  }, [focused, mode, session.connect, session.status]);
+
   return null;
 }
 
-function TabItem({
-  label,
-  icon,
-  active,
-  onPress,
-}: {
-  label: string;
-  icon: ReactNode;
-  active: boolean;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable
-      accessibilityRole="tab"
-      accessibilityState={{ selected: active }}
-      accessibilityLabel={label}
-      onPress={onPress}
-      style={styles.tabItem}
-    >
-      {icon}
-      <Text style={[styles.tabLabel, active && styles.tabLabelActive]}>
-        {label}
-      </Text>
-    </Pressable>
-  );
-}
-
 function resolveTalkState(
-  status: string,
+  displayState: AgentTrayItem["status"],
   speaking: boolean,
+  working: boolean,
   held: boolean,
 ): TalkState {
-  if (status !== "ready") return "offline";
   if (held) return "capturing";
   if (speaking) return "speaking";
+  if (displayState === "needs-setup") return "needs-setup";
+  if (displayState === "stopped") return "stopped";
+  if (displayState === "starting") return "starting";
+  if (displayState === "gone") return "gone";
+  if (displayState === "unreachable" || displayState === "error") {
+    return "unreachable";
+  }
+  if (working) return "working";
   return "idle";
-}
-
-function connectLabel(status: string): string {
-  if (status === "disconnected") return "Connect";
-  if (status === "connecting") return "Cancel";
-  return "Disconnect";
 }
 
 function provisioningLabel(
@@ -1431,30 +1558,33 @@ function provisioningLabel(
       state.index !== undefined && state.total > 0
         ? ` (${state.index} of ${state.total})`
         : "";
-    return `Cloning ${state.repository ?? "repository"}${count}`;
+    return `Cloning startup repository ${state.repository ?? "repository"}${count}`;
   }
-  if (state.stage === "starting_harness") return "Starting coding agent";
+  if (state.stage === "starting_harness") return "Starting agent runtime";
   return state.total > 0
-    ? `Preparing ${state.total} repositories`
-    : "Preparing empty workspace";
+    ? `Preparing ${state.total} startup repositories`
+    : "Preparing workspace";
 }
 
-function statusLabel(status: string, speaking: boolean): string {
-  if (speaking) return "Speaking";
-  if (status === "ready") return "Live";
-  if (status === "connecting") return "Connecting";
-  if (status === "provisioning") return "Provisioning";
-  return "Offline";
-}
-
-function statusTone(
-  status: string,
-  speaking: boolean,
-): "idle" | "busy" | "live" | "error" {
-  if (speaking || status === "ready") return "live";
-  if (status === "connecting") return "busy";
-  if (status === "provisioning") return "busy";
-  return "idle";
+function withActiveAgentRuntime(
+  settings: DeviceSettings,
+  partial: Partial<AgentRuntimeSettings>,
+): DeviceSettings {
+  const current = activeAgent(settings);
+  return {
+    ...settings,
+    agents: settings.agents.map((profile) =>
+      profile.id === current.id
+        ? {
+            ...profile,
+            runtime: {
+              ...(profile.runtime ?? {}),
+              ...partial,
+            },
+          }
+        : profile,
+    ),
+  };
 }
 
 function harnessPrefix(harness: string): string {
@@ -1473,44 +1603,141 @@ function harnessPrefix(harness: string): string {
 }
 
 function sessionDisplayName(profile: AgentProfile, harness: string): string {
-  return `${harnessPrefix(harness)} · ${profile.name.trim() || "Project"}`;
+  return `${profile.name.trim() || "Untitled agent"} · ${harnessPrefix(harness)}`;
 }
 
-function sessionStatusColor(session: ManagedSession): string {
-  if (session.speaking) return color.accent;
-  if (session.working) return color.warn;
-  if (session.status === "ready") return color.live;
-  if (session.status === "connecting") return color.textMuted;
-  if (session.status === "provisioning") return color.warn;
-  return color.textDim;
-}
-
-function describeTarget(
+function agentTrayItem(
+  profile: AgentProfile,
+  session: ManagedSession,
   settings: DeviceSettings,
-  connectedHarness: string,
-  modelLabel = "",
-): string {
-  const agent = activeAgent(settings);
-  const name = sessionDisplayName(
-    agent,
-    connectedHarness || settings.harness,
-  );
-  const named = modelLabel ? `${name} — ${modelLabel}` : name;
-  const host = agent.gatewayUrl
-    .replace(/^[a-z]+:\/\//i, "")
-    .replace(/\/+$/, "");
-  return host ? `${named} · ${host}` : named;
+  providerLabel?: string,
+): AgentTrayItem {
+  const status = agentDisplayState(profile, session);
+  const runtime = resolveAgentRuntimeSettings(profile, settings);
+  const host = providerLabel ?? "Existing host";
+  const repositoryCount = profile.repositories?.length ?? 0;
+  const repositories =
+    repositoryCount > 0
+      ? ` · ${repositoryCount} startup repo${repositoryCount === 1 ? "" : "s"}`
+      : "";
+  return {
+    id: profile.id,
+    name: profile.name.trim() || "Untitled agent",
+    detail: `${host} · ${harnessPrefix(runtime.harness)}${repositories}`,
+    status,
+  };
 }
 
-function resolveModelLabel(
-  catalog: ModelCatalog | null,
-  modelId: string,
-): string {
-  if (!catalog) return "";
-  if (modelId) {
-    return catalog.models.find((model) => model.id === modelId)?.label ?? "";
+function agentDisplayState(
+  profile: AgentProfile,
+  session: ManagedSession,
+): AgentTrayItem["status"] {
+  const state = deriveAgentLifecycle({
+    profile,
+    sessionStatus: session.status,
+    reachability: session.availability,
+  });
+  return state === "running" && session.status === "disconnected"
+    ? "starting"
+    : state;
+}
+
+function trayStatusLabel(status: AgentTrayItem["status"]): string {
+  if (status === "needs-setup") return "Needs setup";
+  if (status === "stopped") return "Session ended";
+  if (status === "starting") return "Starting session";
+  if (status === "running") return "Session running";
+  if (status === "unreachable") return "Session unreachable";
+  if (status === "gone") return "Deployment removed";
+  return "Attention needed";
+}
+
+function trayStatusTone(
+  status: AgentTrayItem["status"],
+): "idle" | "busy" | "live" | "error" {
+  if (status === "running") return "live";
+  if (status === "starting") return "busy";
+  if (status === "unreachable" || status === "error") return "error";
+  return "idle";
+}
+
+function gatewayConfigPatchForProfile(
+  profile: AgentProfile,
+  settings: DeviceSettings,
+  modelKeys: Record<string, string>,
+): Partial<UserConfig> {
+  const runtime = resolveAgentRuntimeSettings(profile, settings);
+  return {
+    repo: {
+      url: runtime.repoUrl || "github.com",
+      credential: "",
+      repositories: profile.repositories ?? [],
+      ...(runtime.defaultBranch.trim()
+        ? { defaultBranch: runtime.defaultBranch.trim() }
+        : {}),
+    },
+    harness: runtime.harness,
+    model: runtime.model,
+    effort: runtime.effort,
+    modelKeys,
+    voice: {
+      stopWord: runtime.stopWord,
+      ...(runtime.voiceId.trim() ? { ttsVoiceId: runtime.voiceId.trim() } : {}),
+    },
+  };
+}
+
+async function resolveProfileModelKeys(
+  profile: AgentProfile,
+  settings: DeviceSettings,
+  credentials: CredentialEntry[],
+): Promise<Record<string, string>> {
+  const credentialIds = { ...(profile.modelCredentialIds ?? {}) };
+  const runtime = resolveAgentRuntimeSettings(profile, settings);
+  const harness = HARNESSES.find((candidate) => candidate.id === runtime.harness);
+  if (harness && !credentialIds[harness.keyEnv]) {
+    const latest = [...credentials]
+      .reverse()
+      .find(
+        (entry) =>
+          entry.kind === "model-key" && entry.keyEnv === harness.keyEnv,
+      );
+    if (latest) credentialIds[harness.keyEnv] = latest.id;
   }
-  return catalog.models.find((model) => model.default)?.label ?? "";
+
+  const resolved = await Promise.all(
+    Object.entries(credentialIds).map(async ([keyEnv, credentialId]) => [
+      keyEnv,
+      await credentialVault.getSecret(credentialId),
+    ] as const),
+  );
+  return Object.fromEntries(
+    resolved.filter(
+      (entry): entry is readonly [string, string] => Boolean(entry[1]?.trim()),
+    ),
+  );
+}
+
+function connectionFor(profile: AgentProfile, userId: string) {
+  return {
+    gatewayUrl: normalizeGatewayUrl(profile.gatewayUrl),
+    token: profile.token,
+    userId,
+  };
+}
+
+function isAgentEndpointConfigured(profile: AgentProfile): boolean {
+  return agentConfigurationIssue(profile) === null;
+}
+
+function isBlankDefaultProfile(agents: AgentProfile[]): boolean {
+  return (
+    agents.length === 1 &&
+    !agents[0]?.token.trim() &&
+    !agents[0]?.gatewayCredentialId &&
+    !agents[0]?.origin &&
+    (!agents[0]?.gatewayUrl || agents[0].gatewayUrl === "http://")
+  );
 }
 
 function catalogModelEfforts(
@@ -1626,24 +1853,20 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: color.bg,
     paddingTop: inset.top,
+    paddingBottom: inset.bottom,
   },
   header: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: space.xl,
-    paddingBottom: space.md,
+    paddingBottom: space.sm,
   },
-  wordmark: {
-    color: color.text,
-    fontSize: font.display - 6,
-    fontWeight: "800",
-    letterSpacing: -0.5,
-  },
-  tagline: {
-    color: color.textDim,
-    fontSize: font.caption,
-    marginTop: 2,
+  headerSide: {
+    width: 36,
+    height: 36,
+    alignItems: "center",
+    justifyContent: "center",
   },
   screen: {
     flex: 1,
@@ -1689,29 +1912,35 @@ const styles = StyleSheet.create({
   sessionChipTextActive: {
     color: color.text,
   },
-  actionRow: {
-    flexDirection: "row",
-    gap: space.md,
-  },
-  actionItem: {
-    flex: 1,
-  },
-  provisioningCard: {
-    borderColor: color.warn,
-  },
-  provisioningTitle: {
-    color: color.text,
-    fontSize: font.label,
-    fontWeight: "700",
-  },
-  provisioningDetail: {
-    color: color.textMuted,
-    fontSize: font.caption,
-    marginTop: space.xs,
-  },
   feed: {
     flex: 1,
     marginTop: space.xs,
+  },
+  firstLaunch: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: space.xl,
+  },
+  firstLaunchTitle: {
+    color: color.text,
+    fontSize: font.title,
+    fontWeight: "700",
+  },
+  firstLaunchDetail: {
+    color: color.textDim,
+    fontSize: font.label,
+    lineHeight: 20,
+    textAlign: "center",
+    marginTop: space.sm,
+  },
+  transcriptAgent: {
+    color: color.textMuted,
+    fontSize: font.micro,
+    fontWeight: "800",
+    letterSpacing: 0.8,
+    textTransform: "uppercase",
+    marginBottom: space.sm,
   },
   pillBlock: {
     gap: space.sm,
@@ -1750,117 +1979,6 @@ const styles = StyleSheet.create({
   },
   modelPillTextActive: {
     color: color.accent,
-  },
-  settingsContent: {
-    paddingBottom: space.xl,
-  },
-  agentList: {
-    gap: space.sm,
-    marginBottom: space.md,
-  },
-  agentRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: space.sm,
-    backgroundColor: color.surfaceRaised,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: color.border,
-    paddingHorizontal: space.md,
-    paddingVertical: space.md,
-  },
-  agentRowActive: {
-    borderColor: color.accent,
-    backgroundColor: color.accentTint,
-  },
-  agentRowName: {
-    flex: 1,
-    color: color.textMuted,
-    fontSize: font.label,
-    fontWeight: "700",
-  },
-  agentRowNameActive: {
-    color: color.text,
-  },
-  agentDelete: {
-    padding: space.xs,
-  },
-  agentAdd: {
-    marginBottom: space.md,
-  },
-  credentialList: {
-    gap: space.sm,
-    marginTop: space.md,
-  },
-  credentialRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: space.sm,
-    borderWidth: 1,
-    borderColor: color.border,
-    borderRadius: radius.md,
-    backgroundColor: color.surfaceRaised,
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm,
-  },
-  credentialRowActive: {
-    borderColor: color.accent,
-    backgroundColor: color.accentTint,
-  },
-  credentialName: {
-    flex: 1,
-    color: color.textMuted,
-    fontSize: font.caption,
-    fontWeight: "700",
-  },
-  credentialNameActive: {
-    color: color.text,
-  },
-  repositoryHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginTop: space.md,
-  },
-  repositoryCount: {
-    color: color.textMuted,
-    fontSize: font.caption,
-    fontWeight: "700",
-  },
-  repositoryList: {
-    gap: space.sm,
-    marginTop: space.sm,
-  },
-  repositoryRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: space.sm,
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: color.border,
-    backgroundColor: color.surfaceRaised,
-  },
-  repositoryRowSelected: {
-    borderColor: color.accent,
-    backgroundColor: color.accentTint,
-  },
-  repositoryText: {
-    flex: 1,
-  },
-  repositoryName: {
-    color: color.textMuted,
-    fontSize: font.caption,
-    fontWeight: "700",
-  },
-  repositoryNameSelected: {
-    color: color.text,
-  },
-  repositoryVisibility: {
-    color: color.textDim,
-    fontSize: font.micro,
-    marginTop: 2,
   },
   githubConfigWarning: {
     color: color.warn,
@@ -1912,32 +2030,5 @@ const styles = StyleSheet.create({
     fontSize: font.micro - 1,
     marginTop: 3,
     letterSpacing: 0.3,
-  },
-  saveBar: {
-    paddingTop: space.md,
-    borderTopWidth: 1,
-    borderTopColor: color.border,
-  },
-  tabBar: {
-    flexDirection: "row",
-    borderTopWidth: 1,
-    borderTopColor: color.border,
-    backgroundColor: color.bgElevated,
-    paddingTop: space.md,
-    paddingBottom: inset.bottom,
-    paddingHorizontal: space.lg,
-  },
-  tabItem: {
-    flex: 1,
-    alignItems: "center",
-    gap: 5,
-  },
-  tabLabel: {
-    color: color.textDim,
-    fontSize: font.micro,
-    fontWeight: "600",
-  },
-  tabLabelActive: {
-    color: color.accent,
   },
 });

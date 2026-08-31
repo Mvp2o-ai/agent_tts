@@ -5,6 +5,7 @@ import {
   classifyIncomingFrame,
   connectionError,
   nextReconnectDelay,
+  probeGatewayHealth,
   validateReadyAudioFormat,
   voiceUrl,
   wsCloseMessage,
@@ -19,6 +20,7 @@ import {
   type SessionStatus,
   type SpeakingState,
 } from "./session-lifecycle";
+import { runSessionPreflight } from "./session-preflight";
 import {
   MAX_TRANSCRIPT_EVENTS,
   type EventKind,
@@ -38,6 +40,11 @@ import {
 
 export type { VoiceMode, SessionStatus };
 export type { EventKind, SessionEvent };
+export type GatewayAvailability =
+  | "unknown"
+  | "reachable"
+  | "unreachable"
+  | "gone";
 
 const CONNECT_TIMEOUT_MS = 20_000;
 let nextConnectionGeneration = 0;
@@ -87,16 +94,20 @@ export function useVoiceSession(
   options: {
     profileId: string;
     focused: boolean;
+    managedHost?: boolean;
+    saveConfigBeforeConnect: () => Promise<void>;
     getGitCredential?: () => Promise<string>;
   },
 ): {
   status: SessionStatus;
+  availability: GatewayAvailability;
   events: SessionEvent[];
   speaking: boolean;
   working: boolean;
   harness: string;
   generationId: string;
   provisioning: ProvisioningState | null;
+  lastError: string;
   connect: (mode: VoiceMode) => void;
   disconnect: () => void;
   pttStart: () => void;
@@ -104,11 +115,14 @@ export function useVoiceSession(
   abort: () => void;
 } {
   const [status, setStatus] = useState<SessionStatus>("disconnected");
+  const [availability, setAvailability] =
+    useState<GatewayAvailability>("unknown");
   const [events, setEvents] = useState<SessionEvent[]>([]);
   const [speaking, setSpeaking] = useState(false);
   const [working, setWorking] = useState(false);
   const [harness, setHarness] = useState("");
   const [generationId, setGenerationId] = useState("");
+  const [lastError, setLastError] = useState("");
   const [provisioning, setProvisioning] =
     useState<ProvisioningState | null>(null);
   const [lastEventId, setLastEventId] = useState(0);
@@ -118,10 +132,14 @@ export function useVoiceSession(
   connRef.current = conn;
   const focusedRef = useRef(options.focused);
   focusedRef.current = options.focused;
+  const saveConfigBeforeConnectRef = useRef(options.saveConfigBeforeConnect);
+  saveConfigBeforeConnectRef.current = options.saveConfigBeforeConnect;
   const getGitCredentialRef = useRef(options.getGitCredential);
   getGitCredentialRef.current = options.getGitCredential;
   const profileIdRef = useRef(options.profileId);
   profileIdRef.current = options.profileId;
+  const managedHostRef = useRef(Boolean(options.managedHost));
+  managedHostRef.current = Boolean(options.managedHost);
 
   const wsRef = useRef<WebSocket | null>(null);
   const modeRef = useRef<VoiceMode>("ptt");
@@ -277,11 +295,16 @@ export function useVoiceSession(
     }
   }, []);
 
-  const failClosedRef = useRef<(message: string) => void>(() => undefined);
+  const failClosedRef = useRef<
+    (message: string, availability?: GatewayAvailability) => void
+  >(() => undefined);
   const startMicRef = useRef<(generation: number) => void>(() => undefined);
 
   const failClosed = useCallback(
-    (message: string) => {
+    (
+      message: string,
+      nextAvailability: GatewayAvailability = "unreachable",
+    ) => {
       sessionGenRef.current = beginDisconnect(sessionGenRef.current);
       pttHeldRef.current = false;
       playbackAllowedRef.current = false;
@@ -290,11 +313,12 @@ export function useVoiceSession(
       closeSocket();
       void flushPlayback();
       void releaseOwnedVoice();
-      pushEvent("error", message);
+      setLastError(message);
+      setAvailability(nextAvailability);
       setProvisioning(null);
       setStatusSafe("disconnected");
     },
-    [clearTimers, closeSocket, flushPlayback, pushEvent, setStatusSafe, stopMic],
+    [clearTimers, closeSocket, flushPlayback, setStatusSafe, stopMic],
   );
   failClosedRef.current = failClosed;
 
@@ -349,6 +373,7 @@ export function useVoiceSession(
           break;
         }
         case "ready": {
+          setLastError("");
           playbackAllowedRef.current = false;
           const formatErr = validateReadyAudioFormat(msg.audioFormat);
           if (formatErr) {
@@ -481,136 +506,146 @@ export function useVoiceSession(
         return;
       }
 
-      let ws: WebSocket;
-      try {
-        ws = new WebSocket(
-          voiceUrl(current, mode, {
-            focused: focusedRef.current,
-            afterEventId: lastEventIdRef.current,
-          }),
-        );
-      } catch (cause) {
-        failClosed(
-          cause instanceof Error ? cause.message : "failed to open websocket",
-        );
-        return;
-      }
-      ws.binaryType = "arraybuffer";
-      wsRef.current = ws;
-      ws.onopen = () => {
-        if (wsRef.current !== ws) return;
+      void probeGatewayHealth(current.gatewayUrl).then((health) => {
         if (!shouldAcceptNativeEvent(sessionGenRef.current, generation)) return;
-        ws.send(
-          JSON.stringify({
-            type: "git_auth",
-            credential: gitCredential,
-          }),
-        );
-      };
-
-      connectTimerRef.current = setTimeout(() => {
-        if (!shouldAcceptNativeEvent(sessionGenRef.current, generation)) return;
-        if (statusRef.current !== "connecting") return;
-        failClosed("connection timed out");
-      }, CONNECT_TIMEOUT_MS);
-
-      ws.onmessage = (event: MessageEvent) => {
-        if (wsRef.current !== ws) return;
-        if (!shouldAcceptNativeEvent(sessionGenRef.current, generation)) return;
-        const data: unknown = event.data;
-        if (isBlob(data)) {
-          void data.arrayBuffer().then((buf) => {
-            if (wsRef.current !== ws) return;
-            if (!shouldAcceptNativeEvent(sessionGenRef.current, generation)) {
-              return;
-            }
-            handleFrame(classifyIncomingFrame(buf), generation);
-          });
+        if (health.status !== "reachable") {
+          const gone = health.status === "missing" && managedHostRef.current;
+          failClosed(
+            gone
+              ? "This deployment was removed from its provider."
+              : health.message,
+            gone ? "gone" : "unreachable",
+          );
           return;
         }
-        handleFrame(classifyIncomingFrame(data), generation);
-      };
-      ws.onerror = () => {
-        if (wsRef.current !== ws) return;
-        if (!shouldAcceptNativeEvent(sessionGenRef.current, generation)) return;
-        pushEvent("error", "websocket error");
-      };
-      ws.onclose = (event) => {
-        if (sessionGenRef.current.generation !== generation) return;
-        wsRef.current = null;
-        pttHeldRef.current = false;
-        playbackAllowedRef.current = false;
-        stopMic();
-        void flushPlayback();
-        if (connectTimerRef.current) {
-          clearTimeout(connectTimerRef.current);
-          connectTimerRef.current = null;
-        }
+        setAvailability("reachable");
 
-        const message = wsCloseMessage(event.code, event.reason ?? "");
-        if (sessionGenRef.current.userClosed) {
-          void releaseOwnedVoice();
-          setStatusSafe("disconnected");
+        let ws: WebSocket;
+        try {
+          ws = new WebSocket(
+            voiceUrl(current, mode, {
+              focused: focusedRef.current,
+              afterEventId: lastEventIdRef.current,
+            }),
+          );
+        } catch (cause) {
+          failClosed(
+            cause instanceof Error ? cause.message : "failed to open websocket",
+          );
           return;
         }
+        ws.binaryType = "arraybuffer";
+        wsRef.current = ws;
+        ws.onopen = () => {
+          if (wsRef.current !== ws) return;
+          if (!shouldAcceptNativeEvent(sessionGenRef.current, generation)) return;
+          ws.send(
+            JSON.stringify({
+              type: "git_auth",
+              credential: gitCredential,
+            }),
+          );
+        };
 
-        const delay = nextReconnectDelay({
-          userClosed: sessionGenRef.current.userClosed,
-          attempt: reconnectAttemptRef.current,
-          closeCode: event.code,
-        });
-        if (delay == null) {
-          sessionGenRef.current = beginDisconnect(sessionGenRef.current);
-          void releaseOwnedVoice();
-          pushEvent("error", message);
-          setStatusSafe("disconnected");
-          return;
-        }
+        connectTimerRef.current = setTimeout(() => {
+          if (!shouldAcceptNativeEvent(sessionGenRef.current, generation)) return;
+          if (statusRef.current !== "connecting") return;
+          failClosed("connection timed out");
+        }, CONNECT_TIMEOUT_MS);
 
-        reconnectAttemptRef.current += 1;
-        pushEvent(
-          "error",
-          `${message} — reconnecting in ${Math.round(delay / 1000)}s (${reconnectAttemptRef.current}/3)`,
-        );
-        setStatusSafe("connecting");
-        reconnectTimerRef.current = setTimeout(() => {
-          if (sessionGenRef.current.userClosed) return;
-          if (sessionGenRef.current.generation !== generation) return;
-          sessionGenRef.current = beginUniqueConnect(sessionGenRef.current);
-          const nextGen = sessionGenRef.current.generation;
-          void releaseOwnedVoice()
-            .catch(() => undefined)
-            .then(() => {
-              if (!focusedRef.current) return null;
-              audioOwnerProfileId = profileIdRef.current;
-              return prepareVoiceNative(nextGen, modeRef.current);
-            })
-            .then(async () => {
-              if (!shouldAcceptNativeEvent(sessionGenRef.current, nextGen)) {
+        ws.onmessage = (event: MessageEvent) => {
+          if (wsRef.current !== ws) return;
+          if (!shouldAcceptNativeEvent(sessionGenRef.current, generation)) return;
+          const data: unknown = event.data;
+          if (isBlob(data)) {
+            void data.arrayBuffer().then((buf) => {
+              if (wsRef.current !== ws) return;
+              if (!shouldAcceptNativeEvent(sessionGenRef.current, generation)) {
                 return;
               }
-              const credential =
-                (await getGitCredentialRef.current?.()) ?? "";
-              if (!shouldAcceptNativeEvent(sessionGenRef.current, nextGen)) {
-                return;
-              }
-              openSocket(nextGen, modeRef.current, credential);
-            })
-            .catch((cause) => {
-              failClosed(
-                cause instanceof Error
-                  ? cause.message
-                  : "native audio failed to prepare",
-              );
+              handleFrame(classifyIncomingFrame(buf), generation);
             });
-        }, delay);
-      };
+            return;
+          }
+          handleFrame(classifyIncomingFrame(data), generation);
+        };
+        ws.onerror = () => {
+          if (wsRef.current !== ws) return;
+          if (!shouldAcceptNativeEvent(sessionGenRef.current, generation)) return;
+        };
+        ws.onclose = (event) => {
+          if (sessionGenRef.current.generation !== generation) return;
+          wsRef.current = null;
+          pttHeldRef.current = false;
+          playbackAllowedRef.current = false;
+          stopMic();
+          void flushPlayback();
+          if (connectTimerRef.current) {
+            clearTimeout(connectTimerRef.current);
+            connectTimerRef.current = null;
+          }
+
+          const message = wsCloseMessage(event.code, event.reason ?? "");
+          if (sessionGenRef.current.userClosed) {
+            void releaseOwnedVoice();
+            setStatusSafe("disconnected");
+            return;
+          }
+
+          const delay = nextReconnectDelay({
+            userClosed: sessionGenRef.current.userClosed,
+            attempt: reconnectAttemptRef.current,
+            closeCode: event.code,
+          });
+          if (delay == null) {
+            sessionGenRef.current = beginDisconnect(sessionGenRef.current);
+            void releaseOwnedVoice();
+            setLastError(message);
+            setAvailability("unreachable");
+            setStatusSafe("disconnected");
+            return;
+          }
+
+          reconnectAttemptRef.current += 1;
+          setStatusSafe("connecting");
+          reconnectTimerRef.current = setTimeout(() => {
+            if (sessionGenRef.current.userClosed) return;
+            if (sessionGenRef.current.generation !== generation) return;
+            sessionGenRef.current = beginUniqueConnect(sessionGenRef.current);
+            const nextGen = sessionGenRef.current.generation;
+            void releaseOwnedVoice()
+              .catch(() => undefined)
+              .then(() => {
+                if (!focusedRef.current) return null;
+                audioOwnerProfileId = profileIdRef.current;
+                return prepareVoiceNative(nextGen, modeRef.current);
+              })
+              .then(async () => {
+                if (!shouldAcceptNativeEvent(sessionGenRef.current, nextGen)) {
+                  return;
+                }
+                const credential =
+                  (await getGitCredentialRef.current?.()) ?? "";
+                if (!shouldAcceptNativeEvent(sessionGenRef.current, nextGen)) {
+                  return;
+                }
+                openSocket(nextGen, modeRef.current, credential);
+              })
+              .catch((cause) => {
+                failClosed(
+                  cause instanceof Error
+                    ? cause.message
+                    : "native audio failed to prepare",
+                );
+              });
+          }, delay);
+        };
+      });
     },
     [
       failClosed,
       flushPlayback,
       handleFrame,
-      pushEvent,
       setStatusSafe,
       stopMic,
     ],
@@ -643,18 +678,23 @@ export function useVoiceSession(
       closeSocket();
       void flushPlayback();
       setProvisioning(null);
+      setLastError("");
+      setAvailability("unknown");
       setStatusSafe("connecting");
 
       const run = async () => {
         let credential: string;
         try {
-          credential = (await getGitCredentialRef.current?.()) ?? "";
+          credential = await runSessionPreflight({
+            saveConfig: saveConfigBeforeConnectRef.current,
+            getGitCredential: getGitCredentialRef.current,
+          });
         } catch (err) {
           if (!shouldAcceptNativeEvent(sessionGenRef.current, generation)) return;
           failClosed(
             err instanceof Error
-              ? err.message
-              : "GitHub credential is unavailable",
+              ? `Could not prepare this session: ${err.message}`
+              : "Could not prepare this session",
           );
           return;
         }
@@ -873,12 +913,14 @@ export function useVoiceSession(
 
   return {
     status,
+    availability,
     events,
     speaking,
     working,
     harness,
     generationId,
     provisioning,
+    lastError,
     connect,
     disconnect,
     pttStart,

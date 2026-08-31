@@ -35,6 +35,27 @@ describe("gateway http", () => {
       const denied = await fetch(`http://127.0.0.1:${port}/v1/config?userId=default`);
       assert.equal(denied.status, 401);
 
+      const capabilitiesDenied = await fetch(
+        `http://127.0.0.1:${port}/v1/capabilities`,
+      );
+      assert.equal(capabilitiesDenied.status, 401);
+
+      const capabilities = await fetch(
+        `http://127.0.0.1:${port}/v1/capabilities`,
+        { headers: { authorization: "Bearer test-token" } },
+      );
+      assert.equal(capabilities.status, 200);
+      const capabilityBody = (await capabilities.json()) as {
+        stt: { providerId: string; providers: { id: string }[] };
+        tts: { providerId: string; providers: { id: string }[] };
+        audioFormat: typeof VOICE_AUDIO_FORMAT;
+      };
+      assert.equal(capabilityBody.stt.providerId, "deepgram");
+      assert.equal(capabilityBody.tts.providerId, "elevenlabs");
+      assert.ok(capabilityBody.stt.providers.some((p) => p.id === "deepgram"));
+      assert.ok(capabilityBody.tts.providers.some((p) => p.id === "elevenlabs"));
+      assert.deepEqual(capabilityBody.audioFormat, VOICE_AUDIO_FORMAT);
+
       const cfg = await fetch(
         `http://127.0.0.1:${port}/v1/config?userId=default`,
         { headers: { authorization: "Bearer test-token" } },
@@ -92,6 +113,37 @@ describe("gateway http", () => {
         },
       );
       assert.deepEqual(await killed.json(), { ok: true, killed: 1 });
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((err) => (err ? reject(err) : resolve())),
+      );
+      await store.close();
+    }
+  });
+
+  it("does not expose adapter startup errors", async () => {
+    const store = new MemoryConfigStore();
+    const { server } = createGateway({
+      token: "test-token",
+      store,
+      boxCommand: [],
+    });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const { port } = server.address() as AddressInfo;
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${port}/v1/debug/prompt`,
+        {
+          method: "POST",
+          headers: {
+            authorization: "Bearer test-token",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ text: "hello" }),
+        },
+      );
+      assert.equal(response.status, 503);
+      assert.deepEqual(await response.json(), { error: "agent unavailable" });
     } finally {
       await new Promise<void>((resolve, reject) =>
         server.close((err) => (err ? reject(err) : resolve())),

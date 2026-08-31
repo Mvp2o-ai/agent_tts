@@ -3,10 +3,12 @@ import { describe, it } from "node:test";
 import {
   classifyIncomingFrame,
   connectionError,
+  healthUrl,
   httpToWs,
   killSessionUrl,
   modelCatalogUrl,
   nextReconnectDelay,
+  probeGatewayHealth,
   validateReadyAudioFormat,
   voiceUrl,
   wsCloseMessage,
@@ -64,6 +66,33 @@ describe("protocol", () => {
         userId: "u",
       }),
       null,
+    );
+  });
+
+  it("classifies a missing deployment before opening its voice socket", async () => {
+    assert.equal(
+      healthUrl("https://agent.example/"),
+      "https://agent.example/health",
+    );
+    assert.deepEqual(
+      await probeGatewayHealth(
+        "https://agent.example",
+        async () => new Response(null, { status: 404 }),
+      ),
+      {
+        status: "missing",
+        message: "Deployment no longer exists.",
+      },
+    );
+    assert.deepEqual(
+      await probeGatewayHealth(
+        "https://agent.example",
+        async () => new Response(null, { status: 503 }),
+      ),
+      {
+        status: "unreachable",
+        message: "Gateway unavailable (503).",
+      },
     );
   });
 

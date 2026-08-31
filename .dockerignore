@@ -1,7 +1,14 @@
 node_modules
 .git
+.github
 dist
 mobile
 *.log
-.env
+.env*
+data
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+.railway
 .DS_Store

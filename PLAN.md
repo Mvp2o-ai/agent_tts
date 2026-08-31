@@ -3,10 +3,10 @@
 ## What it is
 
 A mobile voice remote for a coding agent running in a container. The user
-connects GitHub and attaches repositories to a container; the adapter clones
-them before the harness starts. The user then speaks and the harness works in
-that workspace. Additional clones, git operations, PRs, tools, and editing are
-the harness's job.
+connects GitHub and optionally chooses a startup repository set for a
+container; the adapter clones that set before the harness starts. The user
+then speaks and the harness works in that workspace. Additional clones, git
+operations, PRs, tools, and editing are the harness's job.
 
 ## Architecture
 
@@ -15,7 +15,7 @@ the same image; no Docker socket, no nested containers, no provider API.
 
 ```
 mobile (Expo RN, native audio — the ONLY client; there is no web UI)
-   │  WebSocket: PCM 16 kHz up / MP3 + events down
+   │  WebSocket: PCM 16 kHz up / PCM 24 kHz + events down
    ▼
 agent container (one per agent identity; operator deploys it anywhere)
    ├─ gateway (Node/TS, headless API)
@@ -53,16 +53,17 @@ both run Claude.
 3. **Prompt queue.** Utterances that arrive while the harness is mid-turn are queued and dispatched on the next iteration — same semantics as the platform's incoming-prompt queue.
 4. **Stop word = hard stop.** A configurable keyword (default: "hard stop") detected in STT aborts the current harness turn exactly like pressing the web UI stop button. Detection is transcript-based (Deepgram interim results), not a separate wake-word model.
 5. **One agent per container.** The image ships all four harness CLIs, but container config binds exactly one agent identity and one harness. Never two agent processes in one container. Adding a harness = adding an adapter, no mobile/gateway changes.
-6. **Config lives in SQLite.** Per-user config (attached repositories, harness
-   choice, model keys, stop word, voice) is stored in a SQLite file and
-   editable from the mobile app. GitHub tokens stay in the phone's secure
+6. **Config lives in SQLite.** Per-user config (optional startup repository
+   set, harness choice, model keys, stop word, voice) is stored in a SQLite
+   file and editable from the mobile app. GitHub tokens stay in the phone's secure
    store and are delivered only for a live session. Bring your own persistence
    volume.
-7. **Repo provisioning.** A GitHub App Device Flow token lists repositories in
-   the mobile app. Each agent stores its selected subset. The adapter clones
-   all selections to stable `/workspace/owner--name` directories and emits
-   provisioning progress before `ready`; the harness can clone more, check out
-   PRs, and open PRs.
+7. **Repo provisioning.** A GitHub OAuth Device Flow token with `repo` access
+   lists repositories in the mobile app. Each agent stores its optional startup
+   subset. On each new container session, the adapter clones that set to stable
+   `/workspace/owner--name` directories and emits provisioning progress before
+   `ready`; the set is not a live workspace inventory, and the harness can clone
+   more, check out PRs, and open PRs.
 8. **Device-side session identity.** Each agent has a renameable local project
    name, transcript keyed by profile and container generation, and selectable
    GitHub/model-token references backed by native secure storage.
@@ -80,7 +81,7 @@ both run Claude.
 
 ## Milestones
 
-1. **M0 — Scaffold + CI** (this commit): repo layout, workspaces, lint/test/build CI, agentbox image build workflow.
+1. **M0 — Scaffold + CI:** repo layout, workspaces, lint/test/build CI, and runtime image validation/publication.
 2. **M1 — Box protocol:** agentbox image, claude-code adapter, gateway can run a text prompt end-to-end (no audio).
 3. **M2 — Voice loop:** mobile PTT → Deepgram → prompt → harness → ElevenLabs → playback.
 4. **M3 — Interaction semantics:** barge-in, prompt queue, stop word, hands-free VAD.
@@ -91,14 +92,12 @@ both run Claude.
 
 ## CI/CD (GitHub Actions)
 
-- `ci.yml` — on PR/push: install, lint, typecheck, test across workspaces.
-- `agentbox.yml` — on `agentbox/**` change to main: build + push image to GHCR.
-- `deploy-gateway.yml` — on main: build the gateway so the artifact is proven. Deploy is the operator's job (this is not a hosted product).
-- Mobile builds via EAS at M6 (not in CI initially).
+- `ci.yml` — on PR/push to `main`: runtime and mobile lint/typecheck/test/build, plus a no-push image build when image inputs change. Merge requires the `All checks` job. Image-changing commits and version tags publish to GHCR only after that aggregate passes.
+- Device/EAS builds stay out of GitHub Actions (M6 / operator Expo account).
 
 ## Open questions to align on
 
 1. ~~Where does the gateway live?~~ **BYO host.** Operator deploys the single-agent container anywhere. No first-party hosting.
 3. ~~Container-per-session vs. long-lived?~~ **Disposable:** container exits on new session; platform recreates from image. Cold-start = restart + clone; if it hurts, bake deps into the image (never preserve state).
-4. ~~Who pays for model keys?~~ **BYO everything** (GitHub App, keys, host, Docker image).
+4. ~~Who pays for model keys?~~ **BYO runtime** (model/voice keys, host, Docker image). The upstream public GitHub OAuth client ID is built into the app.
 5. Stop word default and whether it must work while TTS is playing loudly (echo cancellation requirements). Browser capture uses `echoCancellation: true`; still verify on speakerphone hardware.

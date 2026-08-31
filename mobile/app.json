@@ -2,7 +2,7 @@
   "expo": {
     "name": "agent_tts",
     "slug": "agent-tts",
-    "version": "0.0.1",
+    "version": "0.1.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "backgroundColor": "#0e1014",
@@ -39,7 +39,15 @@
         }
       ],
       "expo-asset",
-      "expo-secure-store"
+      "expo-secure-store",
+      "expo-web-browser",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "agent_tts scans setup QR codes for gateways you control.",
+          "barcodeScannerEnabled": true
+        }
+      ]
     ],
     "androidStatusBar": {
       "backgroundColor": "#0e1014",
