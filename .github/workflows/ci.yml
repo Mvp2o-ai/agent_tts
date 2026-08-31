@@ -89,8 +89,9 @@ jobs:
       - name: Generate the Android project
         run: npx expo prebuild --platform android --no-install
       - name: Compile and run Android unit tests
+        working-directory: mobile/android
         run: >-
-          ./android/gradlew
+          ./gradlew
           :app:assembleDebug
           :voice-audio:testDebugUnitTest
           --no-daemon
