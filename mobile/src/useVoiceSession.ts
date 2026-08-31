@@ -20,6 +20,7 @@ import {
   type SessionStatus,
   type SpeakingState,
 } from "./session-lifecycle";
+import { runSessionPreflight } from "./session-preflight";
 import {
   MAX_TRANSCRIPT_EVENTS,
   type EventKind,
@@ -94,6 +95,7 @@ export function useVoiceSession(
     profileId: string;
     focused: boolean;
     managedHost?: boolean;
+    saveConfigBeforeConnect: () => Promise<void>;
     getGitCredential?: () => Promise<string>;
   },
 ): {
@@ -130,6 +132,8 @@ export function useVoiceSession(
   connRef.current = conn;
   const focusedRef = useRef(options.focused);
   focusedRef.current = options.focused;
+  const saveConfigBeforeConnectRef = useRef(options.saveConfigBeforeConnect);
+  saveConfigBeforeConnectRef.current = options.saveConfigBeforeConnect;
   const getGitCredentialRef = useRef(options.getGitCredential);
   getGitCredentialRef.current = options.getGitCredential;
   const profileIdRef = useRef(options.profileId);
@@ -681,13 +685,16 @@ export function useVoiceSession(
       const run = async () => {
         let credential: string;
         try {
-          credential = (await getGitCredentialRef.current?.()) ?? "";
+          credential = await runSessionPreflight({
+            saveConfig: saveConfigBeforeConnectRef.current,
+            getGitCredential: getGitCredentialRef.current,
+          });
         } catch (err) {
           if (!shouldAcceptNativeEvent(sessionGenRef.current, generation)) return;
           failClosed(
             err instanceof Error
-              ? err.message
-              : "GitHub credential is unavailable",
+              ? `Could not prepare this session: ${err.message}`
+              : "Could not prepare this session",
           );
           return;
         }

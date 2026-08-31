@@ -1,6 +1,9 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
+import type { CredentialEntry } from "../../credential-vault";
+import type { AttachedRepository } from "../../settings";
 import { Button, Card, Field } from "../../ui/components";
 import { SetupShell } from "../../ui/AgentSetup";
+import { GithubRepositoryPicker } from "../../ui/GithubRepositoryPicker";
 import { color, font, radius, space } from "../../ui/theme";
 
 export interface RailwayWorkspaceOption {
@@ -17,6 +20,7 @@ export function RailwayAgentScreen({
   selectedWorkspaceId,
   name,
   missingVoiceCredentials,
+  repositorySetup,
   launchPhase,
   error,
   onConnect,
@@ -34,6 +38,18 @@ export function RailwayAgentScreen({
   name: string;
   /** Labels of app-level voice credentials not yet saved in App Settings. */
   missingVoiceCredentials: string[];
+  repositorySetup: {
+    credentials: CredentialEntry[];
+    repositories: AttachedRepository[];
+    selectedCredentialId?: string;
+    selectedRepositories: AttachedRepository[];
+    busy: boolean;
+    search: string;
+    onSearchChange: (value: string) => void;
+    onSelectCredential: (entry: CredentialEntry) => void;
+    onRefresh: () => void;
+    onToggleRepository: (repository: AttachedRepository) => void;
+  };
   launchPhase?: string;
   error?: string;
   onConnect: () => void;
@@ -145,6 +161,24 @@ export function RailwayAgentScreen({
               </Text>
             </View>
           )}
+          <Text style={styles.sectionLabel}>REPOSITORIES</Text>
+          <Text style={styles.repositoryDetail}>
+            Optionally choose repositories to have ready when this agent
+            starts. You can change them later in agent settings.
+          </Text>
+          <GithubRepositoryPicker
+            credentials={repositorySetup.credentials}
+            selectedCredentialId={repositorySetup.selectedCredentialId}
+            repositories={repositorySetup.repositories}
+            selectedRepositories={repositorySetup.selectedRepositories}
+            busy={repositorySetup.busy}
+            search={repositorySetup.search}
+            onSearchChange={repositorySetup.onSearchChange}
+            onManageAccounts={onOpenAppSettings}
+            onSelectCredential={repositorySetup.onSelectCredential}
+            onRefresh={repositorySetup.onRefresh}
+            onToggleRepository={repositorySetup.onToggleRepository}
+          />
           {launchPhase ? (
             <View style={styles.progress}>
               <View style={styles.progressDot} />
@@ -304,5 +338,11 @@ const styles = StyleSheet.create({
     color: color.danger,
     fontSize: font.caption,
     lineHeight: 18,
+  },
+  repositoryDetail: {
+    color: color.textDim,
+    fontSize: font.caption,
+    lineHeight: 17,
+    marginTop: -space.sm,
   },
 });

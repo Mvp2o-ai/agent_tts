@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import type { AttachedRepository } from "../../settings";
 import type { RailwayProvisioningState } from "./driver";
 
 const KEY_PREFIX = "agent_tts.railwayProvisioning.v1.";
@@ -11,6 +12,8 @@ export interface RailwayProvisioningRecord {
   gatewayCredentialId: string;
   sttProviderId: string;
   ttsProviderId: string;
+  gitCredentialId?: string;
+  repositories?: AttachedRepository[];
   /** env -> vault credential id. Never store secrets here. */
   voiceCredentialIds: Record<string, string>;
 }
@@ -78,6 +81,18 @@ function validateRecord(
     !record.sttProviderId ||
     typeof record.ttsProviderId !== "string" ||
     !record.ttsProviderId ||
+    (record.gitCredentialId !== undefined &&
+      (typeof record.gitCredentialId !== "string" || !record.gitCredentialId)) ||
+    (record.repositories !== undefined &&
+      (!Array.isArray(record.repositories) ||
+        record.repositories.some(
+          (repository) =>
+            !repository ||
+            typeof repository !== "object" ||
+            !Number.isSafeInteger(repository.id) ||
+            typeof repository.fullName !== "string" ||
+            typeof repository.cloneUrl !== "string",
+        ))) ||
     !isCredentialIdMap(record.voiceCredentialIds) ||
     !record.state ||
     record.state.providerId !== "railway" ||
@@ -131,6 +146,12 @@ function migrateRecord(raw: UnknownRecord): RailwayProvisioningRecord {
       typeof raw.ttsProviderId === "string" && raw.ttsProviderId
         ? raw.ttsProviderId
         : "elevenlabs",
+    ...(typeof raw.gitCredentialId === "string" && raw.gitCredentialId
+      ? { gitCredentialId: raw.gitCredentialId }
+      : {}),
+    ...(Array.isArray(raw.repositories)
+      ? { repositories: raw.repositories as AttachedRepository[] }
+      : {}),
     voiceCredentialIds,
   };
 }
@@ -162,6 +183,10 @@ function serializableRecord(
     gatewayCredentialId: record.gatewayCredentialId,
     sttProviderId: record.sttProviderId,
     ttsProviderId: record.ttsProviderId,
+    ...(record.gitCredentialId
+      ? { gitCredentialId: record.gitCredentialId }
+      : {}),
+    ...(record.repositories ? { repositories: record.repositories } : {}),
     voiceCredentialIds: { ...record.voiceCredentialIds },
   };
 }

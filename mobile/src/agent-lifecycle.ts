@@ -65,6 +65,15 @@ export function hasProviderProvisioningFailure(profile: AgentProfile): boolean {
   );
 }
 
+export function providerAllowsSessionConnection(profile: AgentProfile): boolean {
+  const phase = profile.origin?.provisioningPhase;
+  return (
+    profile.origin?.kind !== "provider" ||
+    !phase ||
+    phase === "ready"
+  );
+}
+
 function providerIsProvisioning(profile: AgentProfile): boolean {
   const phase = profile.origin?.provisioningPhase;
   return (

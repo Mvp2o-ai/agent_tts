@@ -79,25 +79,6 @@ if [[ ! -f eas-project.local.json ]]; then
   node scripts/localize-eas-project.mjs "$INIT_RESULT" >&2
 fi
 
-if [[ ! -f .env.local && -t 0 ]]; then
-  printf "Configure a GitHub App for repository access now? [y/N]: " >&2
-  read -r CONFIGURE_GITHUB
-  if [[ "$CONFIGURE_GITHUB" =~ ^[Yy]$ ]]; then
-    printf "GitHub App client ID: " >&2
-    read -r GITHUB_CLIENT_ID
-    printf "GitHub App slug: " >&2
-    read -r GITHUB_APP_SLUG
-    if [[ -z "$GITHUB_CLIENT_ID" || -z "$GITHUB_APP_SLUG" ]]; then
-      echo "Both GitHub App values are required." >&2
-      exit 2
-    fi
-    {
-      printf "EXPO_PUBLIC_GITHUB_CLIENT_ID=%s\n" "$GITHUB_CLIENT_ID"
-      printf "EXPO_PUBLIC_GITHUB_APP_SLUG=%s\n" "$GITHUB_APP_SLUG"
-    } >.env.local
-  fi
-fi
-
 # Upload only approved public identifiers. Never upload the gateway/voice .env.
 if [[ -f .env.local ]]; then
   EAS_ENV="$(mktemp)"
@@ -105,7 +86,6 @@ if [[ -f .env.local ]]; then
   while IFS= read -r LINE || [[ -n "$LINE" ]]; do
     case "$LINE" in
       EXPO_PUBLIC_GITHUB_CLIENT_ID=*|\
-      EXPO_PUBLIC_GITHUB_APP_SLUG=*|\
       EXPO_PUBLIC_RAILWAY_CLIENT_ID=*)
         printf "%s\n" "$LINE" >>"$EAS_ENV"
         ;;

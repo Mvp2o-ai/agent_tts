@@ -17,7 +17,7 @@ The guided command:
 2. asks for iPhone or Android;
 3. signs in to Expo and creates an EAS project in the selected account;
 4. creates a unique, local app identifier for the fork;
-5. optionally uploads the fork's public GitHub App identifiers;
+5. optionally uploads a fork's public OAuth client overrides;
 6. guides signing and iPhone device selection when Apple requires it;
 7. submits a self-contained internal-distribution build; and
 8. prints the `https://expo.dev/accounts/.../builds/...` install page.
@@ -47,13 +47,14 @@ The command writes two ignored files under `mobile/`:
   package name. These identifiers must be globally unique.
 - `eas-project.local.json` — the Expo owner and EAS project ID.
 
-Optional public build identifiers belong in `mobile/.env.local`, using
+The upstream GitHub OAuth client ID is committed in the mobile source, so
+ordinary builds need no GitHub EAS variables. A fork with its own OAuth App can
+place an optional public build override in `mobile/.env.local`, using
 `mobile/.env.example` as the template. The installer uploads only these names
 to the EAS `preview` environment:
 
 ```dotenv
 EXPO_PUBLIC_GITHUB_CLIENT_ID=
-EXPO_PUBLIC_GITHUB_APP_SLUG=
 # EXPO_PUBLIC_RAILWAY_CLIENT_ID=
 ```
 

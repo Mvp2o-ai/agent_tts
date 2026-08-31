@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { AgentProfile } from "../../settings";
+import type { AttachedRepository } from "../../settings";
+import { preserveAccessibleRepositories } from "../../repository-selection";
 import { findVoiceCredential } from "../../voice-credentials";
 import { getVoiceProvider } from "../../voice-providers";
 import { useRailwayLauncher } from "../../useRailwayLauncher";
@@ -13,10 +15,14 @@ export function useRailwayProvider(
 ): ProviderPlugin {
   const [name, setName] = useState("");
   const [workspaceId, setWorkspaceId] = useState("");
+  const [gitCredentialId, setGitCredentialId] = useState<string>();
+  const [repositories, setRepositories] = useState<AttachedRepository[]>([]);
 
   const onReady = useCallback(
     (agentId: string) => {
       setName("");
+      setGitCredentialId(undefined);
+      setRepositories([]);
       context.onReady(RAILWAY_PROVIDER_ID, agentId);
     },
     [context.onReady],
@@ -44,6 +50,18 @@ export function useRailwayProvider(
     setWorkspaceId(preferred?.id ?? "");
   }, [launcher.workspaces, workspaceId]);
 
+  useEffect(() => {
+    if (
+      gitCredentialId &&
+      !context.repositorySetup.credentials.some(
+        (entry) => entry.id === gitCredentialId,
+      )
+    ) {
+      setGitCredentialId(undefined);
+      setRepositories([]);
+    }
+  }, [context.repositorySetup.credentials, gitCredentialId]);
+
   return {
     definition: {
       id: RAILWAY_PROVIDER_ID,
@@ -55,6 +73,8 @@ export function useRailwayProvider(
     },
     prepareSetup() {
       setName("");
+      setGitCredentialId(undefined);
+      setRepositories([]);
     },
     renderSetup(onBack) {
       const missingVoiceCredentials = (
@@ -78,6 +98,41 @@ export function useRailwayProvider(
           selectedWorkspaceId={workspaceId}
           name={name}
           missingVoiceCredentials={missingVoiceCredentials}
+          repositorySetup={{
+            credentials: context.repositorySetup.credentials,
+            repositories: context.repositorySetup.repositories,
+            selectedCredentialId: gitCredentialId,
+            selectedRepositories: repositories,
+            busy: context.repositorySetup.busy,
+            search: context.repositorySetup.search,
+            onSearchChange: context.repositorySetup.onSearchChange,
+            onSelectCredential: (entry) => {
+              void context.repositorySetup
+                .onSelectCredential(entry)
+                .then(() => {
+                  setGitCredentialId(entry.id);
+                  setRepositories([]);
+                })
+                .catch(() => undefined);
+            },
+            onRefresh: () => {
+              void context.repositorySetup
+                .onRefresh()
+                .then((next) =>
+                  setRepositories((selected) =>
+                    preserveAccessibleRepositories(selected, next),
+                  ),
+                )
+                .catch(() => undefined);
+            },
+            onToggleRepository: (repository) => {
+              setRepositories((current) =>
+                current.some((item) => item.id === repository.id)
+                  ? current.filter((item) => item.id !== repository.id)
+                  : [...current, repository],
+              );
+            },
+          }}
           launchPhase={launcher.phaseLabel}
           error={launcher.error}
           onConnect={() => void launcher.connect()}
@@ -88,6 +143,8 @@ export function useRailwayProvider(
             void launcher.launch({
               name,
               workspaceId,
+              gitCredentialId,
+              repositories,
             })
           }
           onBack={onBack}

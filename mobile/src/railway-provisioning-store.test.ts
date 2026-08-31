@@ -17,6 +17,16 @@ describe("Railway durable provisioning checkpoints", () => {
       gatewayCredentialId: "gateway-1",
       sttProviderId: "fixture-stt",
       ttsProviderId: "fixture-tts",
+      gitCredentialId: "github-1",
+      repositories: [
+        {
+          id: 7,
+          fullName: "acme/api",
+          cloneUrl: "https://github.com/acme/api.git",
+          defaultBranch: "main",
+          private: true,
+        },
+      ],
       voiceCredentialIds: {
         FIXTURE_API_KEY: "fixture-1",
       },
@@ -41,6 +51,7 @@ describe("Railway durable provisioning checkpoints", () => {
     assert.equal(serialized.includes("fixture-secret"), false);
     assert.equal(serialized.includes("gateway-token"), false);
     assert.equal(serialized.includes("deepgramCredentialId"), false);
+    assert.equal(serialized.includes("github-token"), false);
   });
 
   it("migrates v1 named credential IDs on read", async () => {

@@ -24,9 +24,9 @@ Preserve these decisions:
 - Operators can either launch an agent through a supported public provider
  driver using their own provider account, or pair an already-running local/VPS
  agent by URL and gateway token (manually or by QR). In both paths the operator
- owns the host, persistence volume, vendor keys, and GitHub App identity. The
- adapter provisions repositories selected for the container before starting
- the harness; the harness may clone more.
+ owns the host, persistence volume, and vendor keys. The adapter provisions an
+ optional startup repository set before starting the harness; the harness may
+ clone more.
 - This is not a Railway product. Hosting is configuration- and adapter-driven:
   the mobile app discovers supported provider drivers from a small registry,
   passes each one a provider-neutral deployment specification, and keeps
@@ -59,6 +59,11 @@ Preserve these decisions:
   clone URL.
   The box ships `git` and `gh` so the agent can clone multiple remotes and
   run a normal checkout → review → open-PR flow.
+- GitHub connection is a single user flow: tap **Connect GitHub**, complete
+  GitHub OAuth Device Flow, then select the optional startup repositories for
+  each agent. The open-source mobile app ships the upstream public OAuth client ID,
+  and fork builds inherit it. A fork can set
+  `EXPO_PUBLIC_GITHUB_CLIENT_ID` to use a different OAuth application identity.
 
 ## Clean-clone bootstrap
 
@@ -139,17 +144,17 @@ Model keys are also persisted by that agent's gateway:
 - `CURSOR_API_KEY`
 - `GEMINI_API_KEY`
 - `OPENAI_API_KEY`
-- GitHub App user access and refresh tokens obtained through Device Flow stay
-  in native secure storage. The mobile app refreshes expiring tokens and sends
-  the current access token over the authenticated voice socket for that
-  container session; the gateway must never persist it in SQLite. The app
-  needs Metadata (read), Contents (read/write), and Pull requests (read/write).
-  Users choose which repositories the app installation can access. The mobile
-  app then selects any subset for each agent container. Auth is a host-scoped
-  `http.extraheader` plus `GH_TOKEN`; selected repositories are cloned as
-  stable `owner--name` siblings under `/workspace` before the harness starts.
-  SSH remotes are not authenticated. A manually supplied token remains a
-  migration fallback only.
+- GitHub OAuth Device Flow requests `repo` and `offline_access`. The mobile app
+  lists the user's repositories through `/user/repos`, stores access and refresh
+  tokens in native secure storage, rotates expiring tokens, and sends the
+  current access token over the authenticated voice socket for a container
+  session. Users select an optional startup repository subset for each agent.
+  The gateway treats the token as session-ephemeral, and the adapter provides
+  it to `git` through a host-scoped `http.extraheader` and to `gh` through
+  `GH_TOKEN`. On each new container session, the selected startup repositories
+  are cloned as stable `owner--name` siblings under `/workspace` before the
+  harness starts. This set is separate from repositories the harness discovers
+  or clones during a session.
 
 Never commit `.env`, SQLite files, API keys, PATs, signing credentials, or
 generated native build output. Do not search unrelated projects for secrets.

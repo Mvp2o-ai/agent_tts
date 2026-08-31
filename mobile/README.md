@@ -16,9 +16,8 @@ audio session.
 ```bash
 cd mobile
 npm install
-export EXPO_PUBLIC_GITHUB_CLIENT_ID=<github-app-client-id>
-export EXPO_PUBLIC_GITHUB_APP_SLUG=<github-app-slug>
 # Optional for a fork:
+# export EXPO_PUBLIC_GITHUB_CLIENT_ID=<github-oauth-client-id>
 # export EXPO_PUBLIC_AGENT_RUNTIME_IMAGE=ghcr.io/your-org/agent_tts@sha256:...
 npx expo run:ios          # Simulator, generates ios/ locally (gitignored)
 # or
@@ -36,14 +35,14 @@ Simulator is unreliable. Use a physical device for voice.
 
 ## Configuration and persistence
 
-The GitHub App must enable Device Flow, grant Metadata (read), Contents
-(read/write), and Pull requests (read/write). Keep user-to-server token
-expiration enabled; the app securely stores and rotates Device Flow refresh
-tokens.
+The upstream GitHub OAuth App enables Device Flow and requests `repo` plus
+`offline_access`. The app securely stores access and refresh tokens and rotates
+expiring tokens.
 
-The public GitHub App client ID and slug are compiled from the two
-`EXPO_PUBLIC_GITHUB_*` values above; no client secret is used. Non-secret
-settings live in **device-local AsyncStorage** (`agent_tts.deviceSettings.v1`):
+The upstream public OAuth client ID is committed in `src/product-config.ts`;
+no client secret is used. Forks can override it with the optional
+`EXPO_PUBLIC_GITHUB_CLIENT_ID` variable above. Non-secret settings live in
+**device-local AsyncStorage** (`agent_tts.deviceSettings.v1`):
 
 - Gateway URL, gateway-credential reference, user id
 - GitHub credential references and per-agent selected repository metadata

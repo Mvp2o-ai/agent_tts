@@ -2,12 +2,12 @@
 
 A **mobile-only** voice remote for a coding agent that runs in a container on a host you operate.
 
-You speak into your phone. Connect GitHub, attach one or more repositories to an
-agent container, and they are cloned before its harness (Claude Code, Cursor
-CLI, Gemini CLI, or Codex CLI) starts. Replies come back as speech. There is no
-web version. This repository is the self-hosted distribution — bring your own
-provider account or existing container host, plus your GitHub App, model keys,
-provider keys, Deepgram key, and ElevenLabs key.
+You speak into your phone. Connect GitHub, optionally choose a startup set of
+repositories for an agent container, and they are cloned before its harness
+(Claude Code, Cursor CLI, Gemini CLI, or Codex CLI) starts. Replies come back as
+speech. There is no web version. This repository is the self-hosted
+distribution — bring your own provider account or existing container host, plus
+your model and voice-provider keys.
 
 Users can launch a new agent through a supported provider driver (Railway
 first), or connect an already-running local/VPS agent by URL and gateway token.
@@ -26,7 +26,7 @@ the URL and token to be typed.
 - **Stop word** (default `hard stop`): transcript match aborts the in-flight harness turn
 - **One image, one agent per deployed container**: gateway + adapter + harness CLIs in the same image; the adapter runs as a non-root child process
 - **Multiple live agents in the app**: keep several container endpoints connected, switch focus without stopping background work, and retain a transcript per agent
-- **GitHub repository picker**: sign in with Device Flow and attach any accessible repository subset to each agent
+- **GitHub repository picker**: sign in with Device Flow and choose an optional startup repository subset for each agent
 - **Device credential library**: save GitHub, model, and voice-provider tokens in native secure storage. Voice keys are app-level; GitHub and model keys are selected per agent
 - **SQLite** persistence — a single file on a volume, no database server
 - **Native Expo (React Native) app** — iOS + Android, TestFlight / signed-APK sideload, intentionally not the app stores
@@ -46,7 +46,7 @@ agent container (one per agent identity; operator deploys it anywhere)
    │    TTS adapter (default: ElevenLabs) ── agent replies
    │    prompt queue + config (SQLite file on mounted volume)
    └─ adapter (child process, JSON-lines over stdin/stdout)
-        ├─ provisioner: clones selected repositories into /workspace
+        ├─ provisioner: clones the optional startup set into /workspace
         └─ harness: claude-code | cursor-cli | gemini-cli | codex, cwd = /workspace
 ```
 
@@ -122,20 +122,18 @@ For a local native build instead:
 ```bash
 cd mobile
 npm install
-export EXPO_PUBLIC_GITHUB_CLIENT_ID=<your-github-app-client-id>
-export EXPO_PUBLIC_GITHUB_APP_SLUG=<your-github-app-slug>
+# Optional for a fork with its own GitHub OAuth App:
+# export EXPO_PUBLIC_GITHUB_CLIENT_ID=<your-github-oauth-client-id>
 npx expo run:ios      # or run:android — dev client, not Expo Go
 ```
 
-Create a GitHub App, enable Device Flow, and grant repository permissions for
-Metadata (read), Contents (read/write), and Pull requests (read/write). No
-client secret is embedded in the mobile app. Expiring access and refresh
-tokens are rotated on-device before a session connects; repository access
-remains bounded by the app installation and can be revoked at any time. Users
-install the GitHub App on the repositories they permit,
-authenticate from Settings, and multi-select the subset attached to each agent
-container.
-See the complete [`GitHub App setup guide`](./docs/github-app.md).
+The app ships an upstream public GitHub OAuth client ID and uses Device Flow;
+forks require no GitHub setup. No client secret is embedded. Users connect
+GitHub once, then select an optional startup repository subset for each agent
+container. Selecting none is valid. The OAuth `repo` grant permits access to
+the user's available private repositories; the in-app selection controls which
+repositories are sent to a container. See the complete
+[`GitHub OAuth guide`](./docs/github-oauth.md).
 
 Everything else is configured in-app: one or more agents (agent name,
 gateway URL, token), harness, that harness's API key, stop word, and voice.
@@ -150,10 +148,11 @@ focus without disconnecting the other agents. Each profile has an independently
 persisted transcript; the app appends across reconnects and clears only the
 affected transcript when that container reports a new generation.
 
-The image includes `git` and `gh`. During connection, the adapter clones every
-selected repository to a stable `/workspace/owner--name` directory, reports
-provisioning progress to the phone, and starts the harness only after all
-clones succeed.
+The image includes `git` and `gh`. During each new container session, the
+adapter clones every selected startup repository to a stable
+`/workspace/owner--name` directory, reports provisioning progress to the phone,
+and starts the harness only after all clones succeed. The startup set is not a
+live workspace inventory; the harness owns any additional in-session clones.
 The GitHub user access token is injected as a host-scoped `http.extraheader`
 and `GH_TOKEN`; it is never placed in a clone URL or `.git/config`. The harness
 can still clone additional HTTPS remotes. SSH remotes are not authenticated.

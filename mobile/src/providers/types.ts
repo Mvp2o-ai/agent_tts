@@ -1,6 +1,10 @@
 import type { ReactNode } from "react";
 import type { CredentialEntry } from "../credential-vault";
-import type { AgentProfile, DeviceSettings } from "../settings";
+import type {
+  AgentProfile,
+  AttachedRepository,
+  DeviceSettings,
+} from "../settings";
 
 export const AGENT_HOST_CONTRACT = {
   configMountPath: "/data",
@@ -48,6 +52,23 @@ export interface ProviderSetupContext {
    * screens send the user there instead of collecting keys inline.
    */
   openAppSettings: () => void;
+  /**
+   * Provider setup may offer an optional startup repository set without owning
+   * OAuth or credential storage. The selected credential and repository list
+   * are copied into the new agent profile by the provider launcher.
+   */
+  repositorySetup: {
+    credentials: CredentialEntry[];
+    repositories: AttachedRepository[];
+    repositoryCredentialId?: string;
+    busy: boolean;
+    search: string;
+    onSearchChange: (value: string) => void;
+    onSelectCredential: (
+      entry: CredentialEntry,
+    ) => Promise<AttachedRepository[]>;
+    onRefresh: () => Promise<AttachedRepository[]>;
+  };
   onReady: (providerId: string, agentId: string) => void;
 }
 

@@ -4,6 +4,7 @@ import {
   agentConfigurationIssue,
   deriveAgentLifecycle,
   hasProviderProvisioningFailure,
+  providerAllowsSessionConnection,
 } from "./agent-lifecycle";
 import type { AgentProfile } from "./settings";
 
@@ -70,6 +71,28 @@ describe("agent lifecycle", () => {
   });
 
   it("reports provider provisioning and voice connection startup", () => {
+    assert.equal(
+      providerAllowsSessionConnection(
+        profile({
+          origin: {
+            kind: "provider",
+            provisioningPhase: "deploying",
+          },
+        }),
+      ),
+      false,
+    );
+    assert.equal(
+      providerAllowsSessionConnection(
+        profile({
+          origin: {
+            kind: "provider",
+            provisioningPhase: "ready",
+          },
+        }),
+      ),
+      true,
+    );
     assert.equal(
       deriveAgentLifecycle({
         profile: profile({

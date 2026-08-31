@@ -22,17 +22,24 @@ import {
   type RailwayProvisioningRecord,
 } from "./providers/railway/provisioning-store";
 import { requireVoiceSecrets } from "./voice-credentials";
+import { mergeRecoveredAgentProfile } from "./agent-profile-recovery";
 import { AGENT_RUNTIME_IMAGE } from "./providers/runtime-config";
 import { createAgentDeploymentSpec } from "./providers/types";
 import {
   credentialVault,
   railwayAccessToken,
 } from "./secure-credential-vault";
-import type { AgentProfile, DeviceSettings } from "./settings";
+import type {
+  AgentProfile,
+  AttachedRepository,
+  DeviceSettings,
+} from "./settings";
 
 export interface RailwayLaunchDraft {
   name: string;
   workspaceId: string;
+  gitCredentialId?: string;
+  repositories: AttachedRepository[];
 }
 
 export function useRailwayLauncher({
@@ -107,7 +114,7 @@ export function useRailwayLauncher({
             index >= 0
               ? agents.map((agent) =>
                   agent.id === record.agentId
-                    ? { ...agent, ...restored }
+                    ? mergeRecoveredAgentProfile(agent, restored)
                     : agent,
                 )
               : isBlankDefaultProfile(agents)
@@ -164,10 +171,10 @@ export function useRailwayLauncher({
                   ...previous,
                   agents: previous.agents.map((agent) =>
                     agent.id === record.agentId
-                      ? {
-                          ...agent,
-                          ...profileFromRecord(resumedRecord, token),
-                        }
+                      ? mergeRecoveredAgentProfile(
+                          agent,
+                          profileFromRecord(resumedRecord, token),
+                        )
                       : agent,
                   ),
                 }));
@@ -266,6 +273,8 @@ export function useRailwayLauncher({
           sttProviderId,
           ttsProviderId,
           voiceCredentialIds: voice.credentialIds,
+          gitCredentialId: draft.gitCredentialId,
+          repositories: draft.repositories,
         };
         await railwayProvisioningStore.save(record);
         const profile = profileFromRecord(record, gatewayToken);
@@ -597,6 +606,10 @@ function profileFromRecord(
     gatewayUrl: record.state.domain ? `https://${record.state.domain}` : "",
     token: gatewayToken,
     gatewayCredentialId: record.gatewayCredentialId,
+    ...(record.gitCredentialId
+      ? { gitCredentialId: record.gitCredentialId }
+      : {}),
+    ...(record.repositories ? { repositories: record.repositories } : {}),
     providerCredentialId: record.providerCredentialId,
     hostCredentialIds: {
       ...record.voiceCredentialIds,

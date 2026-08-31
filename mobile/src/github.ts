@@ -1,18 +1,18 @@
 import type { AttachedRepository } from "./settings";
+import { UPSTREAM_GITHUB_OAUTH_CLIENT_ID } from "./product-config";
 
 declare const process: {
   env: {
     EXPO_PUBLIC_GITHUB_CLIENT_ID?: string;
-    EXPO_PUBLIC_GITHUB_APP_SLUG?: string;
   };
 };
 
 const GITHUB_API = "https://api.github.com";
 const GITHUB_LOGIN = "https://github.com/login";
+const GITHUB_OAUTH_SCOPES = "repo offline_access";
 export const GITHUB_CLIENT_ID =
-  process.env.EXPO_PUBLIC_GITHUB_CLIENT_ID?.trim() ?? "";
-export const GITHUB_APP_SLUG =
-  process.env.EXPO_PUBLIC_GITHUB_APP_SLUG?.trim() ?? "";
+  process.env.EXPO_PUBLIC_GITHUB_CLIENT_ID?.trim() ||
+  UPSTREAM_GITHUB_OAUTH_CLIENT_ID;
 
 export interface GithubIdentity {
   login: string;
@@ -52,8 +52,13 @@ export async function requestGithubDeviceCode(
   clientId: string,
   request: GithubRequest = fetch,
 ): Promise<GithubDeviceAuthorization> {
-  if (!clientId.trim()) throw new Error("GitHub App client ID is not configured");
-  const body = new URLSearchParams({ client_id: clientId.trim() });
+  if (!clientId.trim()) {
+    throw new Error("GitHub OAuth client ID is not configured");
+  }
+  const body = new URLSearchParams({
+    client_id: clientId.trim(),
+    scope: GITHUB_OAUTH_SCOPES,
+  });
   const response = await request(`${GITHUB_LOGIN}/device/code`, {
     method: "POST",
     headers: {
@@ -192,7 +197,9 @@ export async function refreshGithubCredential(
   ) {
     throw new Error("GitHub authorization expired; connect GitHub again");
   }
-  if (!clientId.trim()) throw new Error("GitHub App client ID is not configured");
+  if (!clientId.trim()) {
+    throw new Error("GitHub OAuth client ID is not configured");
+  }
 
   const request = options.request ?? fetch;
   const response = await request(`${GITHUB_LOGIN}/oauth/access_token`, {
@@ -234,62 +241,6 @@ export async function fetchGithubIdentity(
 export async function listGithubRepositories(
   token: string,
   request: GithubRequest = fetch,
-  source: "github-app" | "pat" = "github-app",
-): Promise<AttachedRepository[]> {
-  if (source === "pat") return listPatRepositories(token, request);
-
-  const installationIds: number[] = [];
-  for (let page = 1; page <= 100; page += 1) {
-    const response = await request(
-      `${GITHUB_API}/user/installations?per_page=100&page=${page}`,
-      { headers: githubHeaders(token) },
-    );
-    const data = (await response.json()) as Record<string, unknown>;
-    const installations = data.installations;
-    if (!response.ok || !Array.isArray(installations)) {
-      throw new Error(
-        githubError(data, "Could not list GitHub App installations"),
-      );
-    }
-    for (const item of installations) {
-      if (!item || typeof item !== "object") continue;
-      const id = (item as Record<string, unknown>).id;
-      if (Number.isSafeInteger(id) && Number(id) > 0) {
-        installationIds.push(Number(id));
-      }
-    }
-    if (installations.length < 100) break;
-  }
-
-  const byId = new Map<number, AttachedRepository>();
-  for (const installationId of installationIds) {
-    for (let page = 1; page <= 100; page += 1) {
-      const response = await request(
-        `${GITHUB_API}/user/installations/${installationId}/repositories?per_page=100&page=${page}`,
-        { headers: githubHeaders(token) },
-      );
-      const data = (await response.json()) as Record<string, unknown>;
-      const repositories = data.repositories;
-      if (!response.ok || !Array.isArray(repositories)) {
-        throw new Error(
-          githubError(data, "Could not list installation repositories"),
-        );
-      }
-      for (const item of repositories) {
-        const repository = mapGithubRepository(item);
-        if (repository) byId.set(repository.id, repository);
-      }
-      if (repositories.length < 100) break;
-    }
-  }
-  return [...byId.values()].sort((a, b) =>
-    a.fullName.localeCompare(b.fullName),
-  );
-}
-
-async function listPatRepositories(
-  token: string,
-  request: GithubRequest,
 ): Promise<AttachedRepository[]> {
   const repositories: AttachedRepository[] = [];
   for (let page = 1; page <= 100; page += 1) {

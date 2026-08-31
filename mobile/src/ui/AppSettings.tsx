@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import { applyCredentialPaste } from "../credential-paste";
+import type { CredentialEntry } from "../credential-vault";
 import { credentialVault } from "../secure-credential-vault";
 import { HARNESSES } from "../settings";
 import {
@@ -13,6 +14,7 @@ import {
 } from "../voice-providers";
 import { SetupShell } from "./AgentSetup";
 import { Button, Card, Field, Select } from "./components";
+import { TrashIcon } from "./icons";
 import { color, font, radius, space } from "./theme";
 
 export function AppSettingsScreen({
@@ -20,6 +22,10 @@ export function AppSettingsScreen({
   onSaved,
   sttProviderId: initialSttProviderId,
   ttsProviderId: initialTtsProviderId,
+  githubCredentials,
+  githubBusy,
+  onConnectGithub,
+  onRemoveGithubCredential,
 }: {
   onBack: () => void;
   onSaved: (patch: {
@@ -28,6 +34,10 @@ export function AppSettingsScreen({
   }) => void | Promise<void>;
   sttProviderId: string;
   ttsProviderId: string;
+  githubCredentials: CredentialEntry[];
+  githubBusy?: boolean;
+  onConnectGithub: () => Promise<void>;
+  onRemoveGithubCredential: (entry: CredentialEntry) => void;
 }) {
   const [sttProviderId, setSttProviderId] = useState(initialSttProviderId);
   const [ttsProviderId, setTtsProviderId] = useState(initialTtsProviderId);
@@ -184,7 +194,7 @@ export function AppSettingsScreen({
     <SetupShell
       eyebrow="APP"
       title="App credentials"
-      subtitle="Choose the app-level voice services and credentials used for launches from this phone. Paired hosts keep their own gateway environment."
+      subtitle="Manage voice, model, and GitHub credentials saved on this phone. Paired hosts keep their own gateway environment."
       onBack={onBack}
     >
       <Text style={styles.sectionLabel}>VOICE SERVICES</Text>
@@ -277,6 +287,45 @@ export function AppSettingsScreen({
             hint={`Used when an agent runs ${harness.label}.`}
           />
         ))}
+      </Card>
+      <Text style={styles.sectionLabel}>GITHUB ACCOUNTS</Text>
+      <Card style={styles.formCard}>
+        <Text style={styles.providerHint}>
+          GitHub connections are shared across the app. Choose repositories
+          separately for each agent.
+        </Text>
+        <Button
+          label={githubBusy ? "Connecting GitHub…" : "Connect or reconnect GitHub"}
+          busy={githubBusy}
+          onPress={() => void onConnectGithub()}
+        />
+        {githubCredentials.length > 0 ? (
+          <View style={styles.githubList}>
+            {githubCredentials.map((entry) => {
+              return (
+                <View key={entry.id} style={styles.githubRow}>
+                  <Text numberOfLines={1} style={styles.githubName}>
+                    {entry.label}
+                  </Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Delete ${entry.label}`}
+                    hitSlop={8}
+                    onPress={() => onRemoveGithubCredential(entry)}
+                    style={styles.githubDelete}
+                  >
+                    <TrashIcon size={15} color={color.danger} />
+                  </Pressable>
+                </View>
+              );
+            })}
+          </View>
+        ) : (
+          <Text style={styles.note}>
+            No GitHub accounts connected. Connecting is optional; agents may
+            launch with zero repositories.
+          </Text>
+        )}
       </Card>
       {error ? <Text style={styles.error}>{error}</Text> : null}
       <Button
@@ -376,5 +425,22 @@ const styles = StyleSheet.create({
     color: color.textDim,
     fontSize: font.caption,
     lineHeight: 18,
+  },
+  githubList: {
+    gap: space.sm,
+  },
+  githubRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.sm,
+  },
+  githubName: {
+    flex: 1,
+    color: color.textMuted,
+    fontSize: font.caption,
+    fontWeight: "700",
+  },
+  githubDelete: {
+    padding: space.xs,
   },
 });
