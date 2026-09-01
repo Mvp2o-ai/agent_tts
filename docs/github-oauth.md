@@ -15,7 +15,11 @@ The OAuth flow requests `repo` so the token can list, clone, push, and open
 pull requests for repositories available to the user. It also requests
 `offline_access` so expiring tokens can be refreshed. The token stays in the
 phone's native secure storage and is sent to the gateway only for a live
-session; the gateway never persists it in SQLite.
+session; the gateway never persists it in SQLite. Connect or disconnect can
+update the live session’s git/`gh` identity without recreating the container.
+If the token is missing, denied, or expired, the app prompts the operator to
+reconnect GitHub; harnesses on the box should ask for that reconnect rather
+than inventing alternate auth.
 
 The optional startup repository set selected in Agent TTS controls which
 repositories are cloned before a new container session's harness starts. It is

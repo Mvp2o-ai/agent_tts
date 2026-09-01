@@ -18,6 +18,7 @@ describe("Railway durable provisioning checkpoints", () => {
       sttProviderId: "fixture-stt",
       ttsProviderId: "fixture-tts",
       gitCredentialId: "github-1",
+      gitCredentialState: "connected",
       repositories: [
         {
           id: 7,
@@ -97,6 +98,53 @@ describe("Railway durable provisioning checkpoints", () => {
         },
       },
     ]);
+  });
+
+  it("keeps a disconnect tombstone across later stale lifecycle checkpoints", async () => {
+    const storage = memoryStorage();
+    const store = createRailwayProvisioningStore(storage);
+    const record: RailwayProvisioningRecord = {
+      agentId: "agent-1",
+      agentName: "Agent",
+      providerCredentialId: "provider-1",
+      gatewayCredentialId: "gateway-1",
+      sttProviderId: "deepgram",
+      ttsProviderId: "elevenlabs",
+      gitCredentialId: "github-old",
+      gitCredentialState: "connected",
+      repositories: [
+        {
+          id: 1,
+          fullName: "acme/private",
+          cloneUrl: "https://github.com/acme/private.git",
+        },
+      ],
+      voiceCredentialIds: {
+        DEEPGRAM_API_KEY: "deepgram-1",
+        ELEVENLABS_API_KEY: "elevenlabs-1",
+      },
+      state: {
+        providerId: "railway",
+        provisioningId: "launch-1",
+        phase: "deploying",
+        workspaceId: "workspace-1",
+        projectName: "agent-tts-launch-1",
+        updatedAt: 1,
+      },
+    };
+    await store.save(record);
+    await store.updateGithub(record.agentId, undefined, []);
+
+    await store.saveLifecycle({
+      ...record,
+      state: { ...record.state, phase: "ready", updatedAt: 2 },
+    });
+
+    const [saved] = await store.list();
+    assert.equal(saved?.gitCredentialState, "disconnected");
+    assert.equal(saved?.gitCredentialId, undefined);
+    assert.deepEqual(saved?.repositories, []);
+    assert.equal(saved?.state.phase, "ready");
   });
 
   it("rejects records without new or legacy credential references", async () => {

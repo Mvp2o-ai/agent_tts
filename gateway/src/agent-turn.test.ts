@@ -533,6 +533,31 @@ describe("AgentTurn", () => {
 
     await turn.close();
   });
+
+  it("forwards mid-session git_auth replace and clear to the box and client", async () => {
+    const { box, events, turn } = setup();
+    turn.setGitAuth("fresh-token");
+    assert.deepEqual(box.sent.at(-1), {
+      type: "git_auth",
+      credential: "fresh-token",
+    });
+    box.emit({
+      type: "git_auth",
+      state: "ready",
+      login: "wiltshirek",
+    });
+    turn.setGitAuth("");
+    assert.deepEqual(box.sent.at(-1), { type: "git_auth", credential: "" });
+    box.emit({ type: "git_auth", state: "required", message: "expired" });
+    assert.deepEqual(
+      events.filter((event) => event.type === "git_auth"),
+      [
+        { type: "git_auth", state: "ready", login: "wiltshirek" },
+        { type: "git_auth", state: "required", message: "expired" },
+      ],
+    );
+    await turn.close();
+  });
 });
 
 async function microtasks(): Promise<void> {

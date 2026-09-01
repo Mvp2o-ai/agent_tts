@@ -13,8 +13,7 @@ export function GithubRepositoryPicker({
   busy,
   search,
   onSearchChange,
-  onManageAccounts,
-  onSelectCredential,
+  onConnectGithub,
   onRefresh,
   onToggleRepository,
 }: {
@@ -25,68 +24,60 @@ export function GithubRepositoryPicker({
   busy?: boolean;
   search: string;
   onSearchChange: (value: string) => void;
-  onManageAccounts: () => void;
-  onSelectCredential: (entry: CredentialEntry) => void;
+  /** Inline device-flow connect from this agent's setup. */
+  onConnectGithub?: () => void;
   onRefresh: () => void;
   onToggleRepository: (repository: AttachedRepository) => void;
 }) {
-  const visibleRepositories = repositories.filter((repository) =>
+  const selectedCredential = credentials.find(
+    (entry) => entry.id === selectedCredentialId,
+  );
+  const accountLabel = selectedCredential
+    ? githubAccountLabel(selectedCredential)
+    : undefined;
+  const selectedIds = new Set(
+    selectedRepositories.map((repository) => repository.id),
+  );
+  const availableRepositories =
+    repositories.length > 0 ? repositories : selectedRepositories;
+  const visibleRepositories = availableRepositories.filter((repository) =>
     repository.fullName.toLowerCase().includes(search.trim().toLowerCase()),
   );
-  const selectedIds = new Set(selectedRepositories.map((repository) => repository.id));
 
   return (
     <Card style={styles.card}>
-      {credentials.length > 0 ? (
+      {!selectedCredential ? (
         <>
-          <View style={styles.credentialList}>
-            {credentials.map((entry) => {
-              const selected = entry.id === selectedCredentialId;
-              return (
-                <Pressable
-                  key={entry.id}
-                  accessibilityRole="radio"
-                  accessibilityState={{ selected }}
-                  accessibilityLabel={entry.label}
-                  onPress={() => onSelectCredential(entry)}
-                  style={[styles.credentialSelect, selected && styles.credentialActive]}
-                >
-                  <Text
-                    numberOfLines={1}
-                    style={[styles.credentialName, selected && styles.credentialNameActive]}
-                  >
-                    {entry.label}
-                  </Text>
-                  {selected ? <CheckIcon size={14} color={color.accent} /> : null}
-                </Pressable>
-              );
-            })}
+          <View style={styles.statusRow}>
+            <View style={styles.statusDotIdle} />
+            <Text style={styles.statusText}>GitHub is not connected</Text>
           </View>
-          <Button
-            tone="ghost"
-            label="Manage GitHub accounts"
-            onPress={onManageAccounts}
-          />
+          <Text style={styles.note}>
+            Connect this agent to GitHub, then choose the repositories its next
+            container session should clone.
+          </Text>
+          {onConnectGithub ? (
+            <Button
+              tone="primary"
+              busy={busy}
+              label={busy ? "Waiting for GitHub…" : "Connect GitHub"}
+              onPress={onConnectGithub}
+            />
+          ) : null}
         </>
       ) : (
         <>
-          <Text style={styles.note}>
-            Connect GitHub to choose repositories to have ready when this
-            agent starts.
-          </Text>
-          <Button
-            tone="neutral"
-            label="Open App Settings"
-            onPress={onManageAccounts}
-          />
-        </>
-      )}
-
-      {credentials.length > 0 && selectedCredentialId ? (
-        <>
+          <View style={styles.statusRow}>
+            <View style={styles.statusDotLive} />
+            <Text style={styles.statusText}>
+              {selectedCredential.kind === "git-pat"
+                ? `Connected with Git token · ${accountLabel}`
+                : `Connected as ${accountLabel}`}
+            </Text>
+          </View>
           <View style={styles.repositoryHeader}>
-            <Text style={styles.repositoryCount}>
-              {selectedRepositories.length} selected
+            <Text style={styles.selectionCount}>
+              {selectedRepositories.length} selected for next session
             </Text>
             <Button
               tone="ghost"
@@ -95,7 +86,19 @@ export function GithubRepositoryPicker({
               onPress={onRefresh}
             />
           </View>
-          {repositories.length > 0 ? (
+        </>
+      )}
+
+      {selectedCredential ? (
+        <>
+          <View style={styles.divider} />
+          <Text style={styles.sectionTitle}>Startup repositories</Text>
+          <Text style={styles.note}>
+            Checked repositories are cloned under /workspace when the next
+            container session starts. GitHub access itself is available to the
+            current session immediately.
+          </Text>
+          {availableRepositories.length > 0 ? (
             <Field
               label="Filter repositories"
               value={search}
@@ -104,7 +107,17 @@ export function GithubRepositoryPicker({
               placeholder="owner or repository"
             />
           ) : null}
-          {repositories.length > 0 ? (
+          {availableRepositories.length === 0 ? (
+            <Text style={styles.note}>
+              {busy
+                ? "Loading repositories…"
+                : "No repositories returned. Grant repository access, then refresh."}
+            </Text>
+          ) : visibleRepositories.length === 0 ? (
+            <Text style={styles.note}>
+              No repositories match this filter.
+            </Text>
+          ) : (
             <View style={styles.repositoryList}>
               {visibleRepositories.map((repository) => {
                 const selected = selectedIds.has(repository.id);
@@ -113,84 +126,109 @@ export function GithubRepositoryPicker({
                     key={repository.id}
                     accessibilityRole="checkbox"
                     accessibilityState={{ checked: selected }}
-                    accessibilityLabel={repository.fullName}
+                    accessibilityLabel={`${repository.fullName}, ${
+                      selected ? "selected" : "not selected"
+                    } for next session`}
                     onPress={() => onToggleRepository(repository)}
-                    style={[styles.repositoryRow, selected && styles.repositoryRowSelected]}
+                    style={[
+                      styles.repositoryRow,
+                      selected && styles.repositoryRowSelected,
+                    ]}
                   >
+                    <View
+                      style={[
+                        styles.checkbox,
+                        selected && styles.checkboxSelected,
+                      ]}
+                    >
+                      {selected ? (
+                        <CheckIcon size={13} color={color.bg} />
+                      ) : null}
+                    </View>
                     <View style={styles.repositoryText}>
                       <Text
                         numberOfLines={1}
-                        style={[styles.repositoryName, selected && styles.repositoryNameSelected]}
+                        style={[
+                          styles.repositoryName,
+                          selected && styles.repositoryNameSelected,
+                        ]}
                       >
                         {repository.fullName}
                       </Text>
                       <Text style={styles.repositoryVisibility}>
                         {repository.private ? "Private" : "Public"}
+                        {selected ? " · next session" : ""}
                       </Text>
                     </View>
-                    {selected ? <CheckIcon size={15} color={color.accent} /> : null}
                   </Pressable>
                 );
               })}
             </View>
-          ) : (
-            <Text style={styles.note}>
-              No repositories returned. Grant repository access, then refresh.
-            </Text>
           )}
         </>
-      ) : credentials.length > 0 ? (
-        <Text style={styles.note}>
-          Choose a GitHub account, then select any repositories you want ready
-          when this agent starts.
-        </Text>
       ) : null}
     </Card>
   );
+}
+
+export function githubAccountLabel(entry: CredentialEntry): string {
+  const trimmed = entry.label.trim();
+  if (entry.kind === "git-pat") {
+    return trimmed || "Personal access token";
+  }
+  const prefix = "GitHub — ";
+  if (trimmed.startsWith(prefix)) return trimmed.slice(prefix.length);
+  return trimmed || "GitHub account";
 }
 
 const styles = StyleSheet.create({
   card: {
     gap: space.md,
   },
-  credentialList: {
-    gap: space.sm,
-  },
-  credentialSelect: {
-    flex: 1,
-    minWidth: 0,
+  statusRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: space.sm,
-    borderWidth: 1,
-    borderColor: color.border,
-    borderRadius: radius.md,
-    backgroundColor: color.surfaceRaised,
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm,
   },
-  credentialActive: {
-    borderColor: color.accent,
-    backgroundColor: color.accentTint,
+  statusDotLive: {
+    width: 8,
+    height: 8,
+    borderRadius: radius.pill,
+    backgroundColor: color.live,
   },
-  credentialName: {
+  statusDotIdle: {
+    width: 8,
+    height: 8,
+    borderRadius: radius.pill,
+    backgroundColor: color.textDim,
+  },
+  statusText: {
     flex: 1,
-    color: color.textMuted,
+    color: color.text,
     fontSize: font.caption,
     fontWeight: "700",
   },
-  credentialNameActive: {
+  divider: {
+    height: 1,
+    backgroundColor: color.border,
+    marginVertical: space.xs,
+  },
+  sectionTitle: {
     color: color.text,
+    fontSize: font.caption,
+    fontWeight: "800",
+  },
+  selectionCount: {
+    flex: 1,
+    color: color.textDim,
+    fontSize: font.micro,
+    fontWeight: "600",
   },
   repositoryHeader: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-  },
-  repositoryCount: {
-    color: color.textMuted,
-    fontSize: font.caption,
-    fontWeight: "700",
+    gap: space.sm,
   },
   repositoryList: {
     gap: space.sm,
@@ -209,6 +247,20 @@ const styles = StyleSheet.create({
   repositoryRowSelected: {
     borderColor: color.accent,
     backgroundColor: color.accentTint,
+  },
+  checkbox: {
+    width: 22,
+    height: 22,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: color.borderStrong,
+    backgroundColor: color.bgElevated,
+  },
+  checkboxSelected: {
+    borderColor: color.accent,
+    backgroundColor: color.accent,
   },
   repositoryText: {
     flex: 1,

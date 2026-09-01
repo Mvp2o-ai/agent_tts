@@ -14,7 +14,17 @@
  */
 
 import { createInterface } from "node:readline";
-import { installHarnessGitAuth } from "./git.js";
+import {
+  clearHarnessGitAuth,
+  DeferredGitCredential,
+  installHarnessGitAuth,
+  probeGithubCredential,
+} from "./git.js";
+import {
+  GIT_AUTH_REQUIRED_CODE,
+  gitAuthRequiredMessage,
+  isGitAuthFailureMessage,
+} from "./git-auth-error.js";
 import type { Harness } from "./harness.js";
 import {
   parseAttachedRepositories,
@@ -48,8 +58,13 @@ async function main(): Promise<void> {
   let harness: Harness | null = null;
   let initializing = false;
   let initialized = false;
+  const deferredGitCredential = new DeferredGitCredential();
   let inFlight: { id: string; abort: AbortController } | null = null;
   let stdinClosed = false;
+  let gitAuthSequence = Promise.resolve();
+  let gitAuthGeneration = 0;
+  let harnessIdle = Promise.resolve();
+  let resolveHarnessIdle: (() => void) | undefined;
 
   const maybeExit = () => {
     if (stdinClosed && !initializing && !inFlight) process.exit(0);
@@ -81,27 +96,133 @@ async function main(): Promise<void> {
     if (msg.type === "initialize") {
       if (initialized || initializing) return;
       initializing = true;
-      installHarnessGitAuth(host, msg.credential ?? legacyCredential);
-      void provisionRepositories({
-        workspace,
-        repositories,
-        onProgress: (progress) => emit({ type: "provisioning", ...progress }),
-      })
-        .then(() => {
-          harness = selectHarness(harnessId, workspace);
-          initialized = true;
-          process.stderr.write(`agentbox adapter ready harness=${harnessId}\n`);
-          emit({ type: "ready", repositories: repositories.length });
-        })
+      const credential = msg.credential ?? legacyCredential;
+      void (async () => {
+        if (credential.trim()) {
+          const probe = await probeGithubCredential(credential);
+          if (!probe.ok) {
+            clearHarnessGitAuth();
+            emit({
+              type: "git_auth",
+              state: "required",
+              message: probe.message,
+            });
+          } else {
+            installHarnessGitAuth(host, credential);
+            emit({
+              type: "git_auth",
+              state: "ready",
+              ...(probe.login ? { login: probe.login } : {}),
+            });
+          }
+        } else {
+          clearHarnessGitAuth();
+        }
+        await provisionRepositories({
+          workspace,
+          repositories,
+          onProgress: (progress) => emit({ type: "provisioning", ...progress }),
+        });
+        harness = selectHarness(harnessId, workspace);
+        await deferredGitCredential.drain(async (pendingCredential) => {
+          if (!pendingCredential.trim()) {
+            clearHarnessGitAuth();
+            emit({ type: "git_auth", state: "cleared" });
+            return;
+          }
+          const pendingProbe = await probeGithubCredential(pendingCredential);
+          if (!pendingProbe.ok) {
+            emit({
+              type: "git_auth",
+              state: "required",
+              message: pendingProbe.message,
+            });
+            return;
+          }
+          installHarnessGitAuth(host, pendingCredential);
+          emit({
+            type: "git_auth",
+            state: "ready",
+            ...(pendingProbe.login ? { login: pendingProbe.login } : {}),
+          });
+        });
+        initialized = true;
+        process.stderr.write(`agentbox adapter ready harness=${harnessId}\n`);
+        emit({ type: "ready", repositories: repositories.length });
+      })()
         .catch((err: unknown) => {
-          process.stdout.write(encodeOutbound({
-            type: "error",
-            message: err instanceof Error ? err.message : String(err),
-          }), () => process.exit(1));
+          const message = err instanceof Error ? err.message : String(err);
+          const authFailure = isGitAuthFailureMessage(message);
+          if (authFailure) {
+            clearHarnessGitAuth();
+            emit({
+              type: "git_auth",
+              state: "required",
+              message: gitAuthRequiredMessage(message),
+            });
+          }
+          process.stdout.write(
+            encodeOutbound({
+              type: "error",
+              message: authFailure ? gitAuthRequiredMessage(message) : message,
+              ...(authFailure ? { code: GIT_AUTH_REQUIRED_CODE } : {}),
+            }),
+            () => process.exit(1),
+          );
         })
         .finally(() => {
           initializing = false;
           maybeExit();
+        });
+      return;
+    }
+
+    if (msg.type === "git_auth") {
+      if (!initialized) {
+        // The phone can finish OAuth while startup provisioning is still in
+        // flight. Keep only the newest identity and install it before ready.
+        deferredGitCredential.replace(msg.credential);
+        return;
+      }
+      const generation = ++gitAuthGeneration;
+      const credential = msg.credential;
+      const idleAtRequest = harnessIdle;
+      gitAuthSequence = gitAuthSequence
+        .then(() => idleAtRequest)
+        .then(async () => {
+          if (generation !== gitAuthGeneration) return;
+          if (!credential.trim()) {
+            clearHarnessGitAuth();
+            emit({ type: "git_auth", state: "cleared" });
+            return;
+          }
+          const probe = await probeGithubCredential(credential);
+          if (generation !== gitAuthGeneration) return;
+          if (!probe.ok) {
+            emit({
+              type: "git_auth",
+              state: "required",
+              message: probe.message,
+            });
+            return;
+          }
+          installHarnessGitAuth(host, credential);
+          emit({
+            type: "git_auth",
+            state: "ready",
+            ...(probe.login ? { login: probe.login } : {}),
+          });
+        })
+        .catch((err: unknown) => {
+          if (generation !== gitAuthGeneration) return;
+          emit({
+            type: "git_auth",
+            state: "required",
+            message:
+              err instanceof Error
+                ? err.message
+                : "GitHub authorization failed",
+          });
         });
       return;
     }
@@ -128,18 +249,34 @@ async function main(): Promise<void> {
     const abort = new AbortController();
     inFlight = { id: msg.id, abort };
     const promptId = msg.id;
+    const authBeforePrompt = gitAuthSequence;
+    harnessIdle = new Promise<void>((resolve) => {
+      resolveHarnessIdle = resolve;
+    });
 
-    void currentHarness
-      .run(
+    void (async () => {
+      await authBeforePrompt;
+      if (abort.signal.aborted) return "aborted" as const;
+      return currentHarness.run(
         msg.text,
         {
           onChunk: (text) => emit({ type: "chunk", promptId, text }),
-          onToolEvent: (summary) =>
-            emit({ type: "tool_event", promptId, summary }),
+          onToolEvent: (summary) => {
+            emit({ type: "tool_event", promptId, summary });
+            if (isGitAuthFailureMessage(summary)) {
+              clearHarnessGitAuth();
+              emit({
+                type: "git_auth",
+                state: "required",
+                message: gitAuthRequiredMessage(summary),
+              });
+            }
+          },
         },
         abort.signal,
         { model: msg.model, effort: msg.effort },
-      )
+      );
+    })()
       .then((status) => {
         emit(
           status === "aborted"
@@ -148,14 +285,28 @@ async function main(): Promise<void> {
         );
       })
       .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        const authFailure = isGitAuthFailureMessage(message);
+        if (authFailure) {
+          clearHarnessGitAuth();
+          emit({
+            type: "git_auth",
+            state: "required",
+            message: gitAuthRequiredMessage(message),
+          });
+        }
         emit({
           type: "error",
           promptId,
-          message: err instanceof Error ? err.message : String(err),
+          message: authFailure ? gitAuthRequiredMessage(message) : message,
+          ...(authFailure ? { code: GIT_AUTH_REQUIRED_CODE } : {}),
         });
       })
       .finally(() => {
         if (inFlight?.id === promptId) inFlight = null;
+        resolveHarnessIdle?.();
+        resolveHarnessIdle = undefined;
+        harnessIdle = Promise.resolve();
         maybeExit();
       });
   });

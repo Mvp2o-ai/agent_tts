@@ -8,6 +8,7 @@
 /** Gateway -> box */
 export type BoxInbound =
   | { type: "initialize"; credential?: string }
+  | { type: "git_auth"; credential: string }
   | { type: "prompt"; id: string; text: string; model?: string; effort?: string }
   | { type: "abort"; reason: "stop_word" | "user" };
 
@@ -21,11 +22,22 @@ export type BoxOutbound =
       total: number;
     }
   | { type: "ready"; repositories: number }
+  | {
+      type: "git_auth";
+      state: "ready" | "cleared" | "required";
+      message?: string;
+      login?: string;
+    }
   | { type: "chunk"; promptId: string; text: string }
   | { type: "tool_event"; promptId: string; summary: string }
   | { type: "done"; promptId: string }
   | { type: "aborted"; promptId: string }
-  | { type: "error"; promptId?: string; message: string };
+  | {
+      type: "error";
+      promptId?: string;
+      message: string;
+      code?: "git_auth_required";
+    };
 
 export type HarnessId = "claude-code" | "gemini-cli" | "codex" | "cursor-cli";
 
@@ -38,6 +50,7 @@ export function parseOutbound(line: string): BoxOutbound {
   if (
     msg.type === "provisioning" ||
     msg.type === "ready" ||
+    msg.type === "git_auth" ||
     msg.type === "chunk" ||
     msg.type === "tool_event" ||
     msg.type === "done" ||

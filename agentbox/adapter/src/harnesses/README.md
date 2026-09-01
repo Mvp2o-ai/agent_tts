@@ -35,3 +35,9 @@ user access token into the remote URL or `.git/config`). The same token is
 `GH_TOKEN` so `gh pr checkout`, `gh pr create`, and `gh pr review` work.
 `GIT_TERMINAL_PROMPT=0`. SSH remotes have no extraheader and there is no
 ssh-agent in the box.
+
+GitHub auth is the live session identity for `git` and `gh`, not only startup
+cloning. Mid-session connect/disconnect updates that identity. If `git` or
+`gh` fails with missing, denied, unauthorized, or expired access, the harness
+should ask the user to reconnect GitHub in the mobile app and retry after they
+confirm — see `AGENTS.md` / `CLAUDE.md`.

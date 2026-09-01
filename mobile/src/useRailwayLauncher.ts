@@ -165,7 +165,8 @@ export function useRailwayLauncher({
               signal: controller.signal,
               checkpoint: async (state) => {
                 resumedRecord = { ...resumedRecord, state };
-                await railwayProvisioningStore.save(resumedRecord);
+                resumedRecord =
+                  await railwayProvisioningStore.saveLifecycle(resumedRecord);
                 if (!active) return;
                 setSettings((previous) => ({
                   ...previous,
@@ -274,6 +275,9 @@ export function useRailwayLauncher({
           ttsProviderId,
           voiceCredentialIds: voice.credentialIds,
           gitCredentialId: draft.gitCredentialId,
+          gitCredentialState: draft.gitCredentialId
+            ? "connected"
+            : "disconnected",
           repositories: draft.repositories,
         };
         await railwayProvisioningStore.save(record);
@@ -310,7 +314,7 @@ export function useRailwayLauncher({
             checkpoint: async (state) => {
               latestState = state;
               record = { ...record, state };
-              await railwayProvisioningStore.save(record);
+              record = await railwayProvisioningStore.saveLifecycle(record);
               setPhase(state.phase);
               setSettings((previous) => ({
                 ...previous,
@@ -368,7 +372,7 @@ export function useRailwayLauncher({
       }
       const accessToken = await railwayAccessToken(providerCredentialId);
       const checkpoint = async (next: RailwayProvisioningState) => {
-        await railwayProvisioningStore.save({
+        await railwayProvisioningStore.saveLifecycle({
           ...record,
           agentName: profile.name,
           state: next,
@@ -451,7 +455,8 @@ export function useRailwayLauncher({
           agentName: profile.name.trim(),
           state: initialState,
         };
-        await railwayProvisioningStore.save(replacement);
+        replacement =
+          await railwayProvisioningStore.saveLifecycle(replacement);
         setSettings((current) => ({
           ...current,
           agents: current.agents.map((agent) =>
@@ -487,7 +492,8 @@ export function useRailwayLauncher({
           {
             checkpoint: async (state) => {
               replacement = { ...replacement, state };
-              await railwayProvisioningStore.save(replacement);
+              replacement =
+                await railwayProvisioningStore.saveLifecycle(replacement);
               setPhase(state.phase);
               setSettings((current) => ({
                 ...current,
@@ -608,6 +614,9 @@ function profileFromRecord(
     gatewayCredentialId: record.gatewayCredentialId,
     ...(record.gitCredentialId
       ? { gitCredentialId: record.gitCredentialId }
+      : {}),
+    ...(record.gitCredentialState
+      ? { gitCredentialState: record.gitCredentialState }
       : {}),
     ...(record.repositories ? { repositories: record.repositories } : {}),
     providerCredentialId: record.providerCredentialId,

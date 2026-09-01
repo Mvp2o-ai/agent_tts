@@ -68,12 +68,17 @@ export async function requestGithubDeviceCode(
     body: body.toString(),
   });
   const data = (await response.json()) as Record<string, unknown>;
-  if (!response.ok || typeof data.device_code !== "string") {
+  if (
+    !response.ok ||
+    typeof data.device_code !== "string" ||
+    typeof data.user_code !== "string" ||
+    !data.user_code.trim()
+  ) {
     throw new Error(githubError(data, "GitHub device authorization failed"));
   }
   return {
     deviceCode: data.device_code,
-    userCode: String(data.user_code ?? ""),
+    userCode: data.user_code.trim(),
     verificationUri: String(
       data.verification_uri ?? "https://github.com/login/device",
     ),
@@ -93,6 +98,12 @@ export async function pollGithubDeviceToken(
     sleep?: (milliseconds: number) => Promise<void>;
     now?: () => number;
     signal?: AbortSignal;
+    /**
+     * Subscribe to an early-wake event (e.g. app returned to foreground).
+     * Calling the provided callback ends the current wait so the next poll
+     * runs immediately. Returns an unsubscribe function.
+     */
+    onWake?: (wake: () => void) => () => void;
   } = {},
 ): Promise<GithubCredential> {
   const request = options.request ?? fetch;
@@ -103,11 +114,21 @@ export async function pollGithubDeviceToken(
   const now = options.now ?? Date.now;
   const deadline = now() + authorization.expiresIn * 1_000;
   let interval = authorization.interval * 1_000;
+  let polled = false;
 
   while (now() < deadline) {
     if (options.signal?.aborted) throw new Error("GitHub connection cancelled");
-    await sleep(interval);
-    if (options.signal?.aborted) throw new Error("GitHub connection cancelled");
+    if (polled) {
+      await waitForNextGithubPoll(interval, {
+        sleep,
+        signal: options.signal,
+        onWake: options.onWake,
+      });
+      if (options.signal?.aborted) {
+        throw new Error("GitHub connection cancelled");
+      }
+    }
+    polled = true;
     let response: Response;
     try {
       response = await request(`${GITHUB_LOGIN}/oauth/access_token`, {
@@ -139,6 +160,47 @@ export async function pollGithubDeviceToken(
     throw new Error(githubError(data, "GitHub authentication failed"));
   }
   throw new Error("GitHub device authorization expired");
+}
+
+async function waitForNextGithubPoll(
+  milliseconds: number,
+  options: {
+    sleep: (milliseconds: number) => Promise<void>;
+    signal?: AbortSignal;
+    onWake?: (wake: () => void) => () => void;
+  },
+): Promise<void> {
+  if (!options.onWake && !options.signal) {
+    await options.sleep(milliseconds);
+    return;
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    if (options.signal?.aborted) {
+      reject(new Error("GitHub connection cancelled"));
+      return;
+    }
+
+    let settled = false;
+    let unsubscribeWake: (() => void) | undefined;
+    const settle = (action: () => void) => {
+      if (settled) return;
+      settled = true;
+      options.signal?.removeEventListener("abort", onAbort);
+      unsubscribeWake?.();
+      action();
+    };
+    const onAbort = () =>
+      settle(() => reject(new Error("GitHub connection cancelled")));
+    const onWake = () => settle(() => resolve());
+
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+    unsubscribeWake = options.onWake?.(onWake);
+    void options.sleep(milliseconds).then(
+      () => settle(() => resolve()),
+      () => settle(() => resolve()),
+    );
+  });
 }
 
 export function parseGithubCredential(secret: string): GithubCredential {

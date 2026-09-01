@@ -4,7 +4,13 @@ export function mergeRecoveredAgentProfile(
   current: AgentProfile,
   recovered: AgentProfile,
 ): AgentProfile {
-  return {
+  const gitCredentialState =
+    current.gitCredentialState ?? recovered.gitCredentialState;
+  const gitCredentialId =
+    gitCredentialState === "disconnected"
+      ? undefined
+      : current.gitCredentialId ?? recovered.gitCredentialId;
+  const merged: AgentProfile = {
     ...current,
     gatewayUrl: recovered.gatewayUrl,
     token: recovered.token,
@@ -13,4 +19,8 @@ export function mergeRecoveredAgentProfile(
     hostCredentialIds: recovered.hostCredentialIds,
     origin: recovered.origin,
   };
+  if (gitCredentialId) merged.gitCredentialId = gitCredentialId;
+  else delete merged.gitCredentialId;
+  if (gitCredentialState) merged.gitCredentialState = gitCredentialState;
+  return merged;
 }
