@@ -4,6 +4,7 @@
 
 export type BoxInbound =
   | { type: "initialize"; credential?: string }
+  | { type: "git_auth"; credential: string }
   | { type: "prompt"; id: string; text: string; model?: string; effort?: string }
   | { type: "abort"; reason: "stop_word" | "user" };
 
@@ -16,11 +17,22 @@ export type BoxOutbound =
       total: number;
     }
   | { type: "ready"; repositories: number }
+  | {
+      type: "git_auth";
+      state: "ready" | "cleared" | "required";
+      message?: string;
+      login?: string;
+    }
   | { type: "chunk"; promptId: string; text: string }
   | { type: "tool_event"; promptId: string; summary: string }
   | { type: "done"; promptId: string }
   | { type: "aborted"; promptId: string }
-  | { type: "error"; promptId?: string; message: string };
+  | {
+      type: "error";
+      promptId?: string;
+      message: string;
+      code?: "git_auth_required";
+    };
 
 export type HarnessId = "claude-code" | "gemini-cli" | "codex" | "cursor-cli";
 
@@ -45,6 +57,15 @@ export function parseInbound(line: string): BoxInbound {
         ? { credential: msg.credential }
         : {}),
     };
+  }
+  if (msg.type === "git_auth") {
+    if (typeof msg.credential !== "string") {
+      throw new Error("git_auth requires credential string");
+    }
+    if (msg.credential.length > 65_536) {
+      throw new Error("git_auth credential is too large");
+    }
+    return { type: "git_auth", credential: msg.credential };
   }
   if (msg.type === "prompt") {
     if (!msg.id || typeof msg.text !== "string") {

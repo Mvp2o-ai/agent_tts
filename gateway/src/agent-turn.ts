@@ -13,6 +13,12 @@ export type ClientEvent =
       index?: number;
       total: number;
     }
+  | {
+      type: "git_auth";
+      state: "ready" | "cleared" | "required";
+      message?: string;
+      login?: string;
+    }
   | { type: "queued"; promptId: string; position: number }
   | { type: "prompt_start"; promptId: string; text: string }
   | { type: "transcript"; text: string; isFinal: boolean }
@@ -23,7 +29,7 @@ export type ClientEvent =
   | { type: "barge_in" }
   | { type: "stopped"; reason: "stop_word" | "user" }
   | { type: "done"; promptId: string }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string; code?: "git_auth_required" };
 
 export interface VoiceSink {
   sendJson(event: ClientEvent): void;
@@ -134,6 +140,12 @@ export class AgentTurn {
       type: "initialize",
       ...(credential ? { credential } : {}),
     });
+  }
+
+  /** Replace or clear session git/gh auth after the box is already running. */
+  setGitAuth(credential: string): void {
+    if (this.closed || !this.initializationStarted) return;
+    this.box.send({ type: "git_auth", credential });
   }
 
   enqueue(text: string): void {
@@ -268,6 +280,15 @@ export class AgentTurn {
       this.sink.sendJson(msg);
       return;
     }
+    if (msg.type === "git_auth") {
+      this.sink.sendJson({
+        type: "git_auth",
+        state: msg.state,
+        ...(msg.message ? { message: msg.message } : {}),
+        ...(msg.login ? { login: msg.login } : {}),
+      });
+      return;
+    }
     if (msg.type === "ready") {
       if (!this.initialized) {
         this.initialized = true;
@@ -279,7 +300,18 @@ export class AgentTurn {
     }
     if (msg.type === "error" && !msg.promptId) {
       const error = new Error(msg.message);
-      this.sink.sendJson({ type: "error", message: error.message });
+      this.sink.sendJson({
+        type: "error",
+        message: error.message,
+        ...(msg.code ? { code: msg.code } : {}),
+      });
+      if (msg.code === "git_auth_required") {
+        this.sink.sendJson({
+          type: "git_auth",
+          state: "required",
+          message: msg.message,
+        });
+      }
       if (!this.readySettled) {
         this.readySettled = true;
         this.rejectReady(error);
@@ -329,7 +361,18 @@ export class AgentTurn {
     }
 
     if (msg.type === "error") {
-      this.sink.sendJson({ type: "error", message: msg.message });
+      this.sink.sendJson({
+        type: "error",
+        message: msg.message,
+        ...(msg.code ? { code: msg.code } : {}),
+      });
+      if (msg.code === "git_auth_required") {
+        this.sink.sendJson({
+          type: "git_auth",
+          state: "required",
+          message: msg.message,
+        });
+      }
     } else if (msg.type === "done") {
       this.sink.sendJson({ type: "done", promptId: finishedId });
     } else {

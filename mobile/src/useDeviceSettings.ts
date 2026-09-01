@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   createSettingsStore,
   DEFAULT_DEVICE_SETTINGS,
+  readDeviceSettingsForHydration,
   type DeviceSettings,
 } from "./settings";
 import { settingsStore } from "./settings-store";
@@ -21,26 +22,23 @@ export function useDeviceSettings(
   const [hydrated, setHydrated] = useState(false);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
+  const persistAllowedRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
-    void store
-      .load()
-      .then((loaded) => {
-        if (cancelled) return;
-        if (loaded) setSettings(loaded);
-        setHydrated(true);
-      })
-      .catch(() => {
-        if (!cancelled) setHydrated(true);
-      });
+    void readDeviceSettingsForHydration(store).then(({ loaded, persist }) => {
+      if (cancelled) return;
+      persistAllowedRef.current = persist;
+      if (loaded) setSettings(loaded);
+      setHydrated(true);
+    });
     return () => {
       cancelled = true;
     };
   }, [store]);
 
   useEffect(() => {
-    if (!hydrated) return;
+    if (!hydrated || !persistAllowedRef.current) return;
     const timer = setTimeout(() => {
       void store.save(settingsRef.current);
     }, SAVE_DEBOUNCE_MS);
@@ -52,7 +50,9 @@ export function useDeviceSettings(
 
   useEffect(() => {
     return () => {
-      if (hydratedRef.current) void store.save(settingsRef.current);
+      if (hydratedRef.current && persistAllowedRef.current) {
+        void store.save(settingsRef.current);
+      }
     };
   }, [store]);
 

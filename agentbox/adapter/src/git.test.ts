@@ -1,11 +1,44 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  clearHarnessGitAuth,
+  DeferredGitCredential,
   gitAuthEnv,
   gitAuthHost,
   installHarnessGitAuth,
+  probeGithubCredential,
   redact,
 } from "./git.js";
+
+describe("DeferredGitCredential", () => {
+  it("keeps only the newest credential before initialization drains", async () => {
+    const deferred = new DeferredGitCredential();
+    const applied: string[] = [];
+    deferred.replace("old-token");
+    deferred.replace("new-token");
+
+    await deferred.drain(async (credential) => {
+      applied.push(credential);
+    });
+
+    assert.deepEqual(applied, ["new-token"]);
+  });
+
+  it("does not lose a replacement received while a probe is in flight", async () => {
+    const deferred = new DeferredGitCredential();
+    const applied: string[] = [];
+    deferred.replace("first-token");
+
+    await deferred.drain(async (credential) => {
+      applied.push(credential);
+      if (credential === "first-token") {
+        deferred.replace("");
+      }
+    });
+
+    assert.deepEqual(applied, ["first-token", ""]);
+  });
+});
 
 describe("gitAuthHost", () => {
   it("defaults to github.com so the agent can clone any repo on that host", () => {
@@ -76,5 +109,56 @@ describe("installHarnessGitAuth", () => {
     installHarnessGitAuth("", "", env);
     assert.equal(env.GH_TOKEN, undefined);
     assert.equal(env.GIT_CONFIG_KEY_1, undefined);
+  });
+
+  it("replaces a previous credential instead of stacking auth env", () => {
+    const env: NodeJS.ProcessEnv = {};
+    installHarnessGitAuth("github.com", "old-token", env);
+    installHarnessGitAuth("github.com", "new-token", env);
+    assert.equal(env.GH_TOKEN, "new-token");
+    const decoded = Buffer.from(
+      (env.GIT_CONFIG_VALUE_1 ?? "").split(" ")[2] ?? "",
+      "base64",
+    ).toString();
+    assert.equal(decoded, "x-access-token:new-token");
+  });
+});
+
+describe("clearHarnessGitAuth", () => {
+  it("removes gh tokens and host extraheader", () => {
+    const env: NodeJS.ProcessEnv = {};
+    installHarnessGitAuth("github.com", "ghp_secret", env);
+    clearHarnessGitAuth(env);
+    assert.equal(env.GH_TOKEN, undefined);
+    assert.equal(env.GITHUB_TOKEN, undefined);
+    assert.equal(env.GIT_CONFIG_KEY_1, undefined);
+    assert.equal(env.GIT_CONFIG_VALUE_1, undefined);
+    assert.equal(env.GIT_CONFIG_COUNT, "1");
+  });
+});
+
+describe("probeGithubCredential", () => {
+  it("rejects unauthorized tokens", async () => {
+    const result = await probeGithubCredential("dead", async () =>
+      new Response("{}", { status: 401 }),
+    );
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.match(result.message, /expired|connect GitHub again/i);
+    }
+  });
+
+  it("accepts a valid identity probe", async () => {
+    const result = await probeGithubCredential("good", async () =>
+      Response.json({ login: "wiltshirek" }),
+    );
+    assert.deepEqual(result, { ok: true, login: "wiltshirek" });
+  });
+
+  it("keeps the credential on transient probe failures", async () => {
+    const result = await probeGithubCredential("maybe", async () => {
+      throw new Error("network down");
+    });
+    assert.deepEqual(result, { ok: true });
   });
 });

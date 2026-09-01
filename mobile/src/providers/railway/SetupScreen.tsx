@@ -46,9 +46,9 @@ export function RailwayAgentScreen({
     busy: boolean;
     search: string;
     onSearchChange: (value: string) => void;
-    onSelectCredential: (entry: CredentialEntry) => void;
     onRefresh: () => void;
     onToggleRepository: (repository: AttachedRepository) => void;
+    onConnectGithub?: () => void;
   };
   launchPhase?: string;
   error?: string;
@@ -161,10 +161,10 @@ export function RailwayAgentScreen({
               </Text>
             </View>
           )}
-          <Text style={styles.sectionLabel}>REPOSITORIES</Text>
+          <Text style={styles.sectionLabel}>STARTUP REPOSITORIES</Text>
           <Text style={styles.repositoryDetail}>
-            Optionally choose repositories to have ready when this agent
-            starts. You can change them later in agent settings.
+            Pick the GitHub repositories to clone into this agent’s container
+            when each session starts. Skip only if you want an empty workspace.
           </Text>
           <GithubRepositoryPicker
             credentials={repositorySetup.credentials}
@@ -174,8 +174,7 @@ export function RailwayAgentScreen({
             busy={repositorySetup.busy}
             search={repositorySetup.search}
             onSearchChange={repositorySetup.onSearchChange}
-            onManageAccounts={onOpenAppSettings}
-            onSelectCredential={repositorySetup.onSelectCredential}
+            onConnectGithub={repositorySetup.onConnectGithub}
             onRefresh={repositorySetup.onRefresh}
             onToggleRepository={repositorySetup.onToggleRepository}
           />
@@ -193,7 +192,8 @@ export function RailwayAgentScreen({
             disabled={
               !selectedWorkspaceId ||
               !name.trim() ||
-              !voiceConfigured
+              !voiceConfigured ||
+              repositorySetup.busy
             }
             onPress={onLaunch}
           />

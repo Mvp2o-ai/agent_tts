@@ -400,18 +400,47 @@ async function handleVoice(
   };
   ws.once("close", cleanupAttachment);
 
-  if (!session.turn.isInitializationStarted) {
-    const credential = await gitAuth.promise;
-    if (
-      credential === null ||
-      session.attachment !== attachment ||
-      ws.readyState !== WebSocket.OPEN
-    ) {
-      return;
+  let forwardedGitAuthDuringProvisioning = false;
+  const forwardGitAuthDuringProvisioning = (
+    raw: RawData,
+    isBinary: boolean,
+  ) => {
+    if (isBinary || session.attachment !== attachment) return;
+    try {
+      const msg = JSON.parse(bufferText(raw)) as {
+        type?: unknown;
+        credential?: unknown;
+      };
+      if (
+        msg.type === "git_auth" &&
+        typeof msg.credential === "string" &&
+        msg.credential.length <= 65_536
+      ) {
+        forwardedGitAuthDuringProvisioning = true;
+        session.turn.setGitAuth(msg.credential);
+      }
+    } catch {
+      // Ignore malformed pre-ready messages.
     }
+  };
+  ws.on("message", forwardGitAuthDuringProvisioning);
+  ws.once("close", () => {
+    ws.off("message", forwardGitAuthDuringProvisioning);
+  });
+
+  const credential = await gitAuth.promise;
+  if (
+    credential === null ||
+    session.attachment !== attachment ||
+    ws.readyState !== WebSocket.OPEN
+  ) {
+    ws.off("message", forwardGitAuthDuringProvisioning);
+    return;
+  }
+  if (!session.turn.isInitializationStarted) {
     session.turn.initialize(credential);
-  } else {
-    gitAuth.cancel();
+  } else if (!forwardedGitAuthDuringProvisioning) {
+    session.turn.setGitAuth(credential);
   }
   const provisioningAtAttach = !session.turn.isReady;
   if (provisioningAtAttach) {
@@ -421,6 +450,7 @@ async function handleVoice(
   try {
     await session.turn.ready;
   } catch (err) {
+    ws.off("message", forwardGitAuthDuringProvisioning);
     if (sessions.get(userId) === session) sessions.delete(userId);
     await session.turn.close().catch(() => undefined);
     if (session.attachment === attachment && ws.readyState === WebSocket.OPEN) {
@@ -434,7 +464,11 @@ async function handleVoice(
     }
     return;
   }
-  if (session.attachment !== attachment || ws.readyState !== WebSocket.OPEN) return;
+  if (session.attachment !== attachment || ws.readyState !== WebSocket.OPEN) {
+    ws.off("message", forwardGitAuthDuringProvisioning);
+    return;
+  }
+  ws.off("message", forwardGitAuthDuringProvisioning);
 
   const attachStt = () => {
     attachment.stt?.close();
@@ -505,6 +539,12 @@ async function handleVoice(
       attachment.stt?.finish();
     }
     if (msg.type === "abort") input.userAbort();
+    if (msg.type === "git_auth") {
+      const credential = (msg as { credential?: unknown }).credential;
+      if (typeof credential === "string" && credential.length <= 65_536) {
+        session.turn.setGitAuth(credential);
+      }
+    }
   });
 
 }

@@ -49,18 +49,6 @@ export function useRailwayProvider(
     setWorkspaceId(preferred?.id ?? "");
   }, [launcher.workspaces, workspaceId]);
 
-  useEffect(() => {
-    if (
-      gitCredentialId &&
-      !context.repositorySetup.credentials.some(
-        (entry) => entry.id === gitCredentialId,
-      )
-    ) {
-      setGitCredentialId(undefined);
-      setRepositories([]);
-    }
-  }, [context.repositorySetup.credentials, gitCredentialId]);
-
   return {
     definition: {
       id: RAILWAY_PROVIDER_ID,
@@ -72,6 +60,8 @@ export function useRailwayProvider(
     },
     prepareSetup() {
       setName("");
+      setGitCredentialId(undefined);
+      setRepositories([]);
       setGitCredentialId(undefined);
       setRepositories([]);
     },
@@ -105,15 +95,6 @@ export function useRailwayProvider(
             busy: context.repositorySetup.busy,
             search: context.repositorySetup.search,
             onSearchChange: context.repositorySetup.onSearchChange,
-            onSelectCredential: (entry) => {
-              void context.repositorySetup
-                .onSelectCredential(entry)
-                .then(() => {
-                  setGitCredentialId(entry.id);
-                  setRepositories([]);
-                })
-                .catch(() => undefined);
-            },
             onRefresh: () => {
               void context.repositorySetup
                 .onRefresh()
@@ -131,6 +112,17 @@ export function useRailwayProvider(
                   : [...current, repository],
               );
             },
+            onConnectGithub: context.repositorySetup.onConnectGithub
+              ? () => {
+                  void context.repositorySetup
+                    .onConnectGithub?.()
+                    .then((result) => {
+                      if (!result) return;
+                      setGitCredentialId(result.credential.id);
+                      setRepositories([]);
+                    });
+                }
+              : undefined,
           }}
           launchPhase={launcher.phaseLabel}
           error={launcher.error}

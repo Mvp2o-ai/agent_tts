@@ -54,6 +54,7 @@ describe("device settings", () => {
           token: "gateway-token",
           gatewayCredentialId: "gateway-1",
           gitCredentialId: "git-1",
+          gitCredentialState: "connected",
           hostCredentialIds: {
             DEEPGRAM_API_KEY: "deepgram-1",
             ELEVENLABS_API_KEY: "elevenlabs-1",
@@ -82,6 +83,7 @@ describe("device settings", () => {
     assert.equal(parsed.effort, "");
     assert.equal(parsed.modelKeys.ANTHROPIC_API_KEY, undefined);
     assert.equal(activeAgent(parsed).gitCredentialId, "git-1");
+    assert.equal(activeAgent(parsed).gitCredentialState, "connected");
     assert.equal(activeAgent(parsed).gatewayCredentialId, "gateway-1");
     assert.deepEqual(activeAgent(parsed).hostCredentialIds, {
       DEEPGRAM_API_KEY: "deepgram-1",
@@ -467,5 +469,14 @@ describe("device settings", () => {
     const loaded = await store.load();
     assert.equal(loaded?.userId, "ken");
     assert.equal(activeAgent(loaded!).token, "");
+  });
+
+  it("refuses to load corrupt stored JSON as empty defaults", async () => {
+    const kv = memoryKeyValueStore({
+      "agent_tts.deviceSettings.v1": "not-json",
+    });
+    const store = createSettingsStore(kv);
+    await assert.rejects(store.load(), /not valid JSON/);
+    assert.equal(kv.data["agent_tts.deviceSettings.v1"], "not-json");
   });
 });

@@ -32,6 +32,21 @@ describe("GitHub device flow", () => {
     assert.match(authorization.verificationUriComplete ?? "", /ABCD-EFGH/);
   });
 
+  it("rejects a device authorization response without a user code", async () => {
+    await assert.rejects(
+      requestGithubDeviceCode("Ov23.public-client", async () =>
+        Response.json({
+          device_code: "device",
+          user_code: "   ",
+          verification_uri: "https://github.com/login/device",
+          expires_in: 900,
+          interval: 5,
+        }),
+      ),
+      /device authorization failed/,
+    );
+  });
+
   it("polls through authorization_pending and returns the access token", async () => {
     let requests = 0;
     let now = 0;
@@ -90,9 +105,9 @@ describe("GitHub device flow", () => {
     );
     assert.deepEqual(credential, {
       accessToken: "temporary-token",
-      expiresAt: 28_801_000,
+      expiresAt: 28_800_000,
       refreshToken: "refresh",
-      refreshTokenExpiresAt: 15_552_001_000,
+      refreshTokenExpiresAt: 15_552_000_000,
     });
   });
 
@@ -149,6 +164,61 @@ describe("GitHub device flow", () => {
       /cancelled/,
     );
     assert.equal(requested, false);
+  });
+
+  it("polls immediately, then wakes early when the app becomes active", async () => {
+    let requests = 0;
+    let now = 0;
+    let wake: (() => void) | undefined;
+    let sleeping: Promise<void> | undefined;
+    let resolveSleep: (() => void) | undefined;
+
+    const tokenPromise = pollGithubDeviceToken(
+      "Ov23.public-client",
+      {
+        deviceCode: "device",
+        userCode: "CODE",
+        verificationUri: "https://github.com/login/device",
+        expiresIn: 60,
+        interval: 30,
+      },
+      {
+        now: () => now,
+        sleep: async () => {
+          sleeping = new Promise<void>((resolve) => {
+            resolveSleep = resolve;
+          });
+          await sleeping;
+        },
+        onWake: (nextWake) => {
+          wake = nextWake;
+          return () => {
+            if (wake === nextWake) wake = undefined;
+          };
+        },
+        request: async () => {
+          requests += 1;
+          return Response.json(
+            requests === 1
+              ? { error: "authorization_pending" }
+              : { access_token: "github-token" },
+          );
+        },
+      },
+    );
+
+    for (let i = 0; i < 50 && (requests < 1 || !wake); i += 1) {
+      await Promise.resolve();
+    }
+    assert.equal(requests, 1);
+    assert.equal(typeof wake, "function");
+
+    wake?.();
+    const token = await tokenPromise;
+    assert.deepEqual(token, { accessToken: "github-token" });
+    assert.equal(requests, 2);
+    // The long interval sleep must not be required for completion.
+    resolveSleep?.();
   });
 });
 

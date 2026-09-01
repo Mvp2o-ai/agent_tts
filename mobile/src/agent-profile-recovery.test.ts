@@ -46,4 +46,53 @@ describe("agent profile recovery", () => {
     assert.deepEqual(merged.runtime, current.runtime);
     assert.deepEqual(merged.origin, recovered.origin);
   });
+
+  it("restores a missing GitHub binding without overwriting a current one", () => {
+    const base = {
+      id: "agent-1",
+      name: "Agent",
+      gatewayUrl: "https://old.example",
+      token: "old-token",
+    };
+    const recovered = {
+      ...base,
+      gatewayUrl: "https://new.example",
+      token: "new-token",
+      gitCredentialId: "github-recovered",
+    };
+
+    assert.equal(
+      mergeRecoveredAgentProfile(base, recovered).gitCredentialId,
+      "github-recovered",
+    );
+    assert.equal(
+      mergeRecoveredAgentProfile(
+        { ...base, gitCredentialId: "github-current" },
+        recovered,
+      ).gitCredentialId,
+      "github-current",
+    );
+  });
+
+  it("does not resurrect a credential after an explicit disconnect", () => {
+    const current = {
+      id: "agent-1",
+      name: "Agent",
+      gatewayUrl: "https://old.example",
+      token: "old-token",
+      gitCredentialState: "disconnected" as const,
+      repositories: [],
+    };
+    const recovered = {
+      ...current,
+      gatewayUrl: "https://new.example",
+      token: "new-token",
+      gitCredentialState: "connected" as const,
+      gitCredentialId: "github-stale",
+    };
+
+    const merged = mergeRecoveredAgentProfile(current, recovered);
+    assert.equal(merged.gitCredentialState, "disconnected");
+    assert.equal("gitCredentialId" in merged, false);
+  });
 });

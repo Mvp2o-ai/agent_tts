@@ -11,6 +11,9 @@ const fakeBox = fileURLToPath(new URL("./testing/fake-box.ts", import.meta.url))
 const failingProvisionBox = fileURLToPath(
   new URL("./testing/failing-provision-box.ts", import.meta.url),
 );
+const delayedReadyBox = fileURLToPath(
+  new URL("./testing/delayed-ready-box.ts", import.meta.url),
+);
 
 describe("gateway http", () => {
   it("serves health and round-trips a debug prompt through the fake box", async () => {
@@ -232,6 +235,50 @@ describe("gateway http", () => {
     }
   });
 
+  it("forwards replacement GitHub auth from a reconnect during provisioning", async () => {
+    const store = new MemoryConfigStore();
+    const { server, sessions } = createGateway({
+      token: "test-token",
+      store,
+      deepgramKey: "test-stt-key",
+      boxCommand: ["node", "--import", "tsx", delayedReadyBox],
+    });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const { port } = server.address() as AddressInfo;
+    const url =
+      `ws://127.0.0.1:${port}/v1/voice` +
+      "?token=test-token&userId=default&mode=ptt";
+    const first = openAuthenticatedSocket(url);
+
+    try {
+      await waitForJson(first, (msg) => msg.type === "provisioning");
+      first.close();
+      await new Promise<void>((resolve) => first.once("close", () => resolve()));
+
+      const second = openAuthenticatedSocket(url, "replacement-token");
+      const messages = await collectJsonUntil(
+        second,
+        (msg) => msg.type === "ready",
+      );
+      assert.ok(
+        messages.some(
+          (msg) =>
+            msg.type === "git_auth" &&
+            msg.state === "ready" &&
+            msg.login === "replacement-user",
+        ),
+      );
+      second.close();
+    } finally {
+      first.close();
+      await sessions.get("default")?.turn.close();
+      await new Promise<void>((resolve, reject) =>
+        server.close((err) => (err ? reject(err) : resolve())),
+      );
+      await store.close();
+    }
+  });
+
   it("surfaces a clone failure and never unlocks voice", async () => {
     const store = new MemoryConfigStore();
     const { server, sessions } = createGateway({
@@ -402,10 +449,10 @@ describe("gateway http", () => {
   });
 });
 
-function openAuthenticatedSocket(url: string): WebSocket {
+function openAuthenticatedSocket(url: string, credential = ""): WebSocket {
   const ws = new WebSocket(url);
   ws.on("open", () => {
-    ws.send(JSON.stringify({ type: "git_auth", credential: "" }));
+    ws.send(JSON.stringify({ type: "git_auth", credential }));
   });
   return ws;
 }

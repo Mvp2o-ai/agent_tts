@@ -59,11 +59,32 @@ Preserve these decisions:
   clone URL.
   The box ships `git` and `gh` so the agent can clone multiple remotes and
   run a normal checkout → review → open-PR flow.
+- GitHub auth is the live session identity for `git` and `gh` on the box, not
+  only a startup-clone helper. The phone can sign that identity in or out while
+  a session is already up. The gateway/adapter probe expired or revoked tokens
+  and surface a reconnect prompt in the app.
 - GitHub connection is a single user flow: tap **Connect GitHub**, complete
   GitHub OAuth Device Flow, then select the optional startup repositories for
   each agent. The open-source mobile app ships the upstream public OAuth client ID,
   and fork builds inherit it. A fork can set
   `EXPO_PUBLIC_GITHUB_CLIENT_ID` to use a different OAuth application identity.
+
+### Harness GitHub auth (on the box)
+
+Coding harnesses on the agent box must treat GitHub like this:
+
+- `git` and `gh` are installed and are the supported path for clone, fetch,
+  push, PR checkout/create/review, and related GitHub work.
+- Auth is supplied by the phone through the session (`git` host-scoped
+  extraheader + `GH_TOKEN`). Do not ask for a PAT, paste a token into a remote
+  URL, or write credentials into `.git/config`.
+- If `git` or `gh` fails with missing, denied, unauthorized, or expired access
+  — or any equivalent auth failure — **stop and ask the user to reconnect
+  GitHub in the mobile app**, then retry after they confirm. Do not invent
+  alternate auth, scrape secrets, or pretend private GitHub operations work
+  without auth.
+- Optional startup repositories are a next-session clone template only. They
+  are not the definition of GitHub access, and they do not replace reconnect.
 
 ## Clean-clone bootstrap
 
@@ -154,9 +175,11 @@ Model keys are also persisted by that agent's gateway:
   session. Users select an optional startup repository subset for each agent.
   The gateway treats the token as session-ephemeral, and the adapter provides
   it to `git` through a host-scoped `http.extraheader` and to `gh` through
-  `GH_TOKEN`. On each new container session, the selected startup repositories
-  are cloned as stable `owner--name` siblings under `/workspace` before the
-  harness starts. This set is separate from repositories the harness discovers
+  `GH_TOKEN`. Mid-session connect or disconnect updates that live identity.
+  Expired or revoked tokens must fail closed and ask the operator to reconnect
+  GitHub. On each new container session, the selected startup repositories are
+  cloned as stable `owner--name` siblings under `/workspace` before the harness
+  starts. That startup set is separate from repositories the harness discovers
   or clones during a session.
 
 Never commit `.env`, SQLite files, API keys, PATs, signing credentials, or

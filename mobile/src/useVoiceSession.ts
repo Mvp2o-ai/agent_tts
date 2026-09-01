@@ -21,6 +21,7 @@ import {
   type SpeakingState,
 } from "./session-lifecycle";
 import { runSessionPreflight } from "./session-preflight";
+import { resolveDesiredGitCredential } from "./session-git-auth";
 import {
   MAX_TRANSCRIPT_EVENTS,
   type EventKind,
@@ -71,7 +72,12 @@ type ServerEvent = {
   repository?: string;
   index?: number;
   total?: number;
+  state?: "ready" | "cleared" | "required";
+  login?: string;
+  code?: "git_auth_required";
 };
+
+export type GitAuthState = "unknown" | "ready" | "cleared" | "required";
 
 export interface ProvisioningState {
   stage: "preparing" | "cloning" | "starting_harness";
@@ -108,8 +114,12 @@ export function useVoiceSession(
   generationId: string;
   provisioning: ProvisioningState | null;
   lastError: string;
+  gitAuthState: GitAuthState;
+  gitAuthMessage: string;
   connect: (mode: VoiceMode) => void;
   disconnect: () => void;
+  sendGitAuth: (credential: string) => void;
+  markGitAuthRequired: (message: string) => void;
   pttStart: () => void;
   pttEnd: () => void;
   abort: () => void;
@@ -123,6 +133,8 @@ export function useVoiceSession(
   const [harness, setHarness] = useState("");
   const [generationId, setGenerationId] = useState("");
   const [lastError, setLastError] = useState("");
+  const [gitAuthState, setGitAuthState] = useState<GitAuthState>("unknown");
+  const [gitAuthMessage, setGitAuthMessage] = useState("");
   const [provisioning, setProvisioning] =
     useState<ProvisioningState | null>(null);
   const [lastEventId, setLastEventId] = useState(0);
@@ -159,6 +171,8 @@ export function useVoiceSession(
   const eventIdRef = useRef(0);
   const generationIdRef = useRef("");
   const lastEventIdRef = useRef(0);
+  const desiredGitCredentialRef = useRef("");
+  const gitAuthRevisionRef = useRef(0);
 
   useEffect(() => {
     let current = true;
@@ -456,9 +470,52 @@ export function useVoiceSession(
           setWorking(false);
           pushEvent("done", msg.promptId ?? "done");
           break;
-        case "error":
-          pushEvent("error", msg.message ?? "error");
+        case "error": {
+          const message = msg.message ?? "error";
+          pushEvent("error", message);
+          if (
+            msg.code === "git_auth_required" ||
+            /connect GitHub again/i.test(message)
+          ) {
+            setGitAuthState("required");
+            setGitAuthMessage(
+              message.trim() ||
+                "GitHub authorization expired; connect GitHub again",
+            );
+          }
           break;
+        }
+        case "git_auth": {
+          if (
+            msg.state !== "ready" &&
+            msg.state !== "cleared" &&
+            msg.state !== "required"
+          ) {
+            break;
+          }
+          setGitAuthState(msg.state);
+          if (msg.state === "ready") {
+            setGitAuthMessage(
+              msg.login ? `GitHub connected as ${msg.login}` : "GitHub connected",
+            );
+            pushEvent(
+              "ready",
+              msg.login
+                ? `GitHub authorized as ${msg.login}`
+                : "GitHub authorized",
+            );
+          } else if (msg.state === "cleared") {
+            setGitAuthMessage("GitHub signed out on this session");
+            pushEvent("stopped", "GitHub signed out on this session");
+          } else {
+            const reason =
+              msg.message?.trim() ||
+              "GitHub authorization expired; connect GitHub again";
+            setGitAuthMessage(reason);
+            pushEvent("error", reason);
+          }
+          break;
+        }
         default:
           break;
       }
@@ -498,7 +555,7 @@ export function useVoiceSession(
   );
 
   const openSocket = useCallback(
-    (generation: number, mode: VoiceMode, gitCredential: string) => {
+    (generation: number, mode: VoiceMode) => {
       const current = connRef.current;
       const err = connectionError(current);
       if (err) {
@@ -542,7 +599,7 @@ export function useVoiceSession(
           ws.send(
             JSON.stringify({
               type: "git_auth",
-              credential: gitCredential,
+              credential: desiredGitCredentialRef.current,
             }),
           );
         };
@@ -624,12 +681,20 @@ export function useVoiceSession(
                 if (!shouldAcceptNativeEvent(sessionGenRef.current, nextGen)) {
                   return;
                 }
+                const authRevision = gitAuthRevisionRef.current;
                 const credential =
                   (await getGitCredentialRef.current?.()) ?? "";
                 if (!shouldAcceptNativeEvent(sessionGenRef.current, nextGen)) {
                   return;
                 }
-                openSocket(nextGen, modeRef.current, credential);
+                desiredGitCredentialRef.current =
+                  resolveDesiredGitCredential(
+                    desiredGitCredentialRef.current,
+                    authRevision,
+                    gitAuthRevisionRef.current,
+                    credential,
+                  );
+                openSocket(nextGen, modeRef.current);
               })
               .catch((cause) => {
                 failClosed(
@@ -662,8 +727,36 @@ export function useVoiceSession(
     void flushPlayback();
     void releaseOwnedVoice();
     setProvisioning(null);
+    setGitAuthState("unknown");
+    setGitAuthMessage("");
     setStatusSafe("disconnected");
   }, [clearTimers, closeSocket, flushPlayback, setStatusSafe, stopMic]);
+
+  const sendGitAuth = useCallback((credential: string) => {
+    if (credential.length > 65_536) {
+      pushEvent("error", "GitHub credential is too large");
+      return;
+    }
+    gitAuthRevisionRef.current += 1;
+    desiredGitCredentialRef.current = credential;
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(
+      JSON.stringify({
+        type: "git_auth",
+        credential,
+      }),
+    );
+  }, [pushEvent]);
+
+  const markGitAuthRequired = useCallback((message: string) => {
+    const reason =
+      message.trim() ||
+      "GitHub authorization expired; connect GitHub again";
+    setGitAuthState("required");
+    setGitAuthMessage(reason);
+    pushEvent("error", reason);
+  }, [pushEvent]);
 
   const connect = useCallback(
     (mode: VoiceMode) => {
@@ -679,11 +772,14 @@ export function useVoiceSession(
       void flushPlayback();
       setProvisioning(null);
       setLastError("");
+      setGitAuthState("unknown");
+      setGitAuthMessage("");
       setAvailability("unknown");
       setStatusSafe("connecting");
 
       const run = async () => {
         let credential: string;
+        const authRevision = gitAuthRevisionRef.current;
         try {
           credential = await runSessionPreflight({
             saveConfig: saveConfigBeforeConnectRef.current,
@@ -691,6 +787,14 @@ export function useVoiceSession(
           });
         } catch (err) {
           if (!shouldAcceptNativeEvent(sessionGenRef.current, generation)) return;
+          const message =
+            err instanceof Error
+              ? err.message
+              : "Could not prepare this session";
+          if (/GitHub authorization expired|GitHub credential/i.test(message)) {
+            setGitAuthState("required");
+            setGitAuthMessage(message);
+          }
           failClosed(
             err instanceof Error
               ? `Could not prepare this session: ${err.message}`
@@ -699,8 +803,14 @@ export function useVoiceSession(
           return;
         }
         if (!shouldAcceptNativeEvent(sessionGenRef.current, generation)) return;
+        desiredGitCredentialRef.current = resolveDesiredGitCredential(
+          desiredGitCredentialRef.current,
+          authRevision,
+          gitAuthRevisionRef.current,
+          credential,
+        );
         if (!focusedRef.current) {
-          openSocket(generation, mode, credential);
+          openSocket(generation, mode);
           return;
         }
         audioOwnerProfileId = profileIdRef.current;
@@ -749,7 +859,7 @@ export function useVoiceSession(
         }
 
         if (!mountedRef.current) return;
-        openSocket(generation, mode, credential);
+        openSocket(generation, mode);
       };
 
       void run();
@@ -921,8 +1031,12 @@ export function useVoiceSession(
     generationId,
     provisioning,
     lastError,
+    gitAuthState,
+    gitAuthMessage,
     connect,
     disconnect,
+    sendGitAuth,
+    markGitAuthRequired,
     pttStart,
     pttEnd,
     abort,

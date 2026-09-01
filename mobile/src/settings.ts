@@ -63,6 +63,8 @@ export interface AgentProfile {
    */
   desiredState?: AgentDesiredState;
   gitCredentialId?: string;
+  /** Distinguishes an explicit disconnect from a legacy missing assignment. */
+  gitCredentialState?: "connected" | "disconnected";
   gatewayCredentialId?: string;
   providerCredentialId?: string;
   hostCredentialIds?: Record<string, string>;
@@ -220,6 +222,10 @@ function parseAgentProfile(value: unknown): AgentProfile | null {
         : DEFAULT_AGENT_DESIRED_STATE,
     ...(typeof o.gitCredentialId === "string"
       ? { gitCredentialId: o.gitCredentialId }
+      : {}),
+    ...(o.gitCredentialState === "connected" ||
+    o.gitCredentialState === "disconnected"
+      ? { gitCredentialState: o.gitCredentialState }
       : {}),
     ...(typeof o.gatewayCredentialId === "string"
       ? { gatewayCredentialId: o.gatewayCredentialId }
@@ -460,17 +466,41 @@ export interface KeyValueStore {
   setItem(key: string, value: string): Promise<void>;
 }
 
+function readStoredDeviceSettings(raw: string): DeviceSettings {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    throw new Error("device settings are not valid JSON");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("device settings are not an object");
+  }
+  return parseDeviceSettings(raw);
+}
+
 export function createSettingsStore(kv: KeyValueStore) {
   return {
     async load(): Promise<DeviceSettings | null> {
       const raw = await kv.getItem(SETTINGS_STORAGE_KEY);
       if (raw == null || raw === "") return null;
-      return parseDeviceSettings(raw);
+      return readStoredDeviceSettings(raw);
     },
     async save(settings: DeviceSettings): Promise<void> {
       await kv.setItem(SETTINGS_STORAGE_KEY, serializeDeviceSettings(settings));
     },
   };
+}
+
+/** A failed read must not authorize writing in-memory defaults back to disk. */
+export async function readDeviceSettingsForHydration(
+  store: ReturnType<typeof createSettingsStore>,
+): Promise<{ loaded: DeviceSettings | null; persist: boolean }> {
+  try {
+    return { loaded: await store.load(), persist: true };
+  } catch {
+    return { loaded: null, persist: false };
+  }
 }
 
 export function memoryKeyValueStore(

@@ -15,8 +15,9 @@ A QR pairing code imports that same existing-agent connection without requiring
 the URL and token to be typed.
 
 > **Setting this up with a coding agent?** Give it this repository and tell it
-> to follow [`AGENTS.md`](./AGENTS.md). That guide defines the clean-clone
-> bootstrap, secrets boundary, verification gates, and architecture contracts.
+> to follow [`AGENTS.md`](./AGENTS.md) (and [`CLAUDE.md`](./CLAUDE.md) for the
+> GitHub reconnect rule). Those guides define the clean-clone bootstrap,
+> secrets boundary, verification gates, and architecture contracts.
 
 ## What you get
 

@@ -13,6 +13,7 @@ export interface RailwayProvisioningRecord {
   sttProviderId: string;
   ttsProviderId: string;
   gitCredentialId?: string;
+  gitCredentialState?: "connected" | "disconnected";
   repositories?: AttachedRepository[];
   /** env -> vault credential id. Never store secrets here. */
   voiceCredentialIds: Record<string, string>;
@@ -28,16 +29,99 @@ export interface ProvisioningKeyValueStore {
 export function createRailwayProvisioningStore(
   storage: ProvisioningKeyValueStore,
 ) {
+  const pendingWrites = new Map<string, Promise<void>>();
+  const keyFor = (agentId: string) =>
+    `${KEY_PREFIX}${encodeURIComponent(agentId)}`;
+  const withWriteLock = async <T>(
+    agentId: string,
+    operation: () => Promise<T>,
+  ): Promise<T> => {
+    const previous = pendingWrites.get(agentId) ?? Promise.resolve();
+    const task = previous.catch(() => undefined).then(operation);
+    const settled = task.then(
+      () => undefined,
+      () => undefined,
+    );
+    pendingWrites.set(agentId, settled);
+    try {
+      return await task;
+    } finally {
+      if (pendingWrites.get(agentId) === settled) {
+        pendingWrites.delete(agentId);
+      }
+    }
+  };
+  const read = async (
+    agentId: string,
+  ): Promise<RailwayProvisioningRecord | undefined> => {
+    const rows = await storage.multiGet([keyFor(agentId)]);
+    const raw = rows[0]?.[1];
+    if (!raw) return undefined;
+    const record = migrateRecord(JSON.parse(raw) as UnknownRecord);
+    validateRecord(record);
+    return record;
+  };
+  const write = async (record: RailwayProvisioningRecord): Promise<void> => {
+    validateRecord(record);
+    await storage.setItem(
+      keyFor(record.agentId),
+      JSON.stringify(serializableRecord(record)),
+    );
+  };
+
   return {
     async save(record: RailwayProvisioningRecord): Promise<void> {
-      validateRecord(record);
-      await storage.setItem(
-        `${KEY_PREFIX}${encodeURIComponent(record.agentId)}`,
-        JSON.stringify(serializableRecord(record)),
-      );
+      await withWriteLock(record.agentId, () => write(record));
+    },
+
+    async saveLifecycle(record: RailwayProvisioningRecord): Promise<RailwayProvisioningRecord> {
+      return withWriteLock(record.agentId, async () => {
+        const current = await read(record.agentId);
+        if (!current) {
+          await write(record);
+          return record;
+        }
+        const merged: RailwayProvisioningRecord = {
+          ...record,
+          repositories: current.repositories ?? [],
+        };
+        delete merged.gitCredentialId;
+        delete merged.gitCredentialState;
+        if (current.gitCredentialId) {
+          merged.gitCredentialId = current.gitCredentialId;
+        }
+        if (current.gitCredentialState) {
+          merged.gitCredentialState = current.gitCredentialState;
+        }
+        await write(merged);
+        return merged;
+      });
+    },
+
+    async updateGithub(
+      agentId: string,
+      gitCredentialId: string | undefined,
+      repositories: AttachedRepository[],
+    ): Promise<RailwayProvisioningRecord | undefined> {
+      return withWriteLock(agentId, async () => {
+        const current = await read(agentId);
+        if (!current) return undefined;
+        const next: RailwayProvisioningRecord = {
+          ...current,
+          repositories,
+          gitCredentialState: gitCredentialId
+            ? "connected"
+            : "disconnected",
+        };
+        if (gitCredentialId) next.gitCredentialId = gitCredentialId;
+        else delete next.gitCredentialId;
+        await write(next);
+        return next;
+      });
     },
 
     async list(): Promise<RailwayProvisioningRecord[]> {
+      await Promise.all([...pendingWrites.values()]);
       const keys = (await storage.getAllKeys()).filter((key) =>
         key.startsWith(KEY_PREFIX),
       );
@@ -56,7 +140,7 @@ export function createRailwayProvisioningStore(
     },
 
     async remove(agentId: string): Promise<void> {
-      await storage.removeItem(`${KEY_PREFIX}${encodeURIComponent(agentId)}`);
+      await withWriteLock(agentId, () => storage.removeItem(keyFor(agentId)));
     },
   };
 }
@@ -83,6 +167,12 @@ function validateRecord(
     !record.ttsProviderId ||
     (record.gitCredentialId !== undefined &&
       (typeof record.gitCredentialId !== "string" || !record.gitCredentialId)) ||
+    (record.gitCredentialState !== undefined &&
+      record.gitCredentialState !== "connected" &&
+      record.gitCredentialState !== "disconnected") ||
+    (record.gitCredentialState === "connected" && !record.gitCredentialId) ||
+    (record.gitCredentialState === "disconnected" &&
+      record.gitCredentialId !== undefined) ||
     (record.repositories !== undefined &&
       (!Array.isArray(record.repositories) ||
         record.repositories.some(
@@ -149,6 +239,10 @@ function migrateRecord(raw: UnknownRecord): RailwayProvisioningRecord {
     ...(typeof raw.gitCredentialId === "string" && raw.gitCredentialId
       ? { gitCredentialId: raw.gitCredentialId }
       : {}),
+    ...(raw.gitCredentialState === "connected" ||
+    raw.gitCredentialState === "disconnected"
+      ? { gitCredentialState: raw.gitCredentialState }
+      : {}),
     ...(Array.isArray(raw.repositories)
       ? { repositories: raw.repositories as AttachedRepository[] }
       : {}),
@@ -185,6 +279,9 @@ function serializableRecord(
     ttsProviderId: record.ttsProviderId,
     ...(record.gitCredentialId
       ? { gitCredentialId: record.gitCredentialId }
+      : {}),
+    ...(record.gitCredentialState
+      ? { gitCredentialState: record.gitCredentialState }
       : {}),
     ...(record.repositories ? { repositories: record.repositories } : {}),
     voiceCredentialIds: { ...record.voiceCredentialIds },

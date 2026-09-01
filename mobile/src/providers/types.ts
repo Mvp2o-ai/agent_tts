@@ -64,10 +64,15 @@ export interface ProviderSetupContext {
     busy: boolean;
     search: string;
     onSearchChange: (value: string) => void;
-    onSelectCredential: (
-      entry: CredentialEntry,
-    ) => Promise<AttachedRepository[]>;
     onRefresh: () => Promise<AttachedRepository[]>;
+    /**
+     * Inline GitHub device-flow connect from the launch screen. The returned
+     * identity belongs to this draft agent; it is never a second live token.
+     */
+    onConnectGithub?: () => Promise<{
+      credential: CredentialEntry;
+      repositories: AttachedRepository[];
+    } | null>;
   };
   onReady: (providerId: string, agentId: string) => void;
 }

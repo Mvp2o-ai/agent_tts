@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import { encodeOutbound, parseInbound } from "./protocol.js";
 
 describe("parseInbound", () => {
-  it("parses initialize, prompt, and abort", () => {
+  it("parses initialize, git_auth, prompt, and abort", () => {
     assert.deepEqual(parseInbound('{"type":"initialize"}'), {
       type: "initialize",
     });
@@ -11,6 +11,14 @@ describe("parseInbound", () => {
       parseInbound('{"type":"initialize","credential":"session-token"}'),
       { type: "initialize", credential: "session-token" },
     );
+    assert.deepEqual(
+      parseInbound('{"type":"git_auth","credential":"session-token"}'),
+      { type: "git_auth", credential: "session-token" },
+    );
+    assert.deepEqual(parseInbound('{"type":"git_auth","credential":""}'), {
+      type: "git_auth",
+      credential: "",
+    });
     assert.deepEqual(parseInbound('{"type":"prompt","id":"1","text":"hi"}'), {
       type: "prompt",
       id: "1",

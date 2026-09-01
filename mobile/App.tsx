@@ -3,12 +3,14 @@ import * as Crypto from "expo-crypto";
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
 import {
   Alert,
+  AppState,
   Linking,
   Pressable,
   ScrollView,
@@ -28,6 +30,12 @@ import {
   deriveAgentLifecycle,
   providerAllowsSessionConnection,
 } from "./src/agent-lifecycle";
+import {
+  bindAgentGithubIdentity,
+  connectAgentGithub,
+  disconnectAgentGithub,
+  toggleAgentRepository,
+} from "./src/agent-github";
 import type { CredentialEntry } from "./src/credential-vault";
 import {
   fetchGithubIdentity,
@@ -36,10 +44,12 @@ import {
   pollGithubDeviceToken,
   requestGithubDeviceCode,
   serializeGithubCredential,
+  type GithubDeviceAuthorization,
 } from "./src/github";
 import { connectionError, normalizeGatewayUrl } from "./src/protocol";
 import { parseAgentPairingUrl } from "./src/pairing";
 import { useProviderRegistry } from "./src/providers/registry";
+import { railwayProvisioningStore } from "./src/providers/railway/provisioning-store";
 import {
   credentialVault,
   githubAccessToken,
@@ -63,9 +73,13 @@ import {
   ManualAgentScreen,
 } from "./src/ui/AgentSetup";
 import { AgentDetailScreen } from "./src/ui/AgentDetail";
+import {
+  AgentGithubSummary,
+  GithubRepositoryManagerScreen,
+} from "./src/ui/AgentGithub";
 import { AppSettingsScreen } from "./src/ui/AppSettings";
 import { AgentTray, type AgentTrayItem } from "./src/ui/AgentTray";
-import { GithubRepositoryPicker } from "./src/ui/GithubRepositoryPicker";
+import { GithubDeviceAuthModal } from "./src/ui/GithubDeviceAuthModal";
 import { PairingScannerScreen } from "./src/ui/PairingScanner";
 import {
   Button,
@@ -105,8 +119,12 @@ const EMPTY_SESSION: ManagedSession = {
   generationId: "",
   provisioning: null,
   lastError: "",
+  gitAuthState: "unknown",
+  gitAuthMessage: "",
   connect: () => undefined,
   disconnect: () => undefined,
+  sendGitAuth: () => undefined,
+  markGitAuthRequired: () => undefined,
   pttStart: () => undefined,
   pttEnd: () => undefined,
   abort: () => undefined,
@@ -115,10 +133,30 @@ const EMPTY_SESSION: ManagedSession = {
 export default function App() {
   const [mode, setMode] = useState<VoiceMode>("ptt");
   const [pttHeld, setPttHeld] = useState(false);
-  const { settings, setSettings, hydrated } = useDeviceSettings();
+  const {
+    settings,
+    setSettings: setStoredSettings,
+    hydrated,
+  } = useDeviceSettings();
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+  const setSettings = useCallback(
+    (
+      next:
+        | DeviceSettings
+        | ((previous: DeviceSettings) => DeviceSettings),
+    ) => {
+      const resolved =
+        typeof next === "function" ? next(settingsRef.current) : next;
+      settingsRef.current = resolved;
+      setStoredSettings(resolved);
+    },
+    [setStoredSettings],
+  );
   const [configMsg, setConfigMsg] = useState("");
   const [configOk, setConfigOk] = useState(false);
   const [sessions, setSessions] = useState<Record<string, ManagedSession>>({});
+  const sessionCommandsRef = useRef<Record<string, ManagedSession>>({});
   const [credentials, setCredentials] = useState<CredentialEntry[]>([]);
   const [githubRepositories, setGithubRepositories] = useState<
     AttachedRepository[]
@@ -127,11 +165,20 @@ export default function App() {
     useState<string | undefined>();
   const [githubSearch, setGithubSearch] = useState("");
   const [githubBusy, setGithubBusy] = useState(false);
+  const [githubDeviceAuth, setGithubDeviceAuth] =
+    useState<GithubDeviceAuthorization | null>(null);
+  const githubDeviceAuthAbortRef = useRef<AbortController | null>(null);
+  const githubConnectGenerationRef = useRef(0);
+  const githubRepositoryRequestRef = useRef(0);
+  const [gitAuthEpoch, setGitAuthEpoch] = useState(0);
   const [legacySecretsMigrated, setLegacySecretsMigrated] = useState(false);
   const [modelCatalog, setModelCatalog] = useState<ModelCatalog | null>(null);
   const [agentSetupScreen, setAgentSetupScreen] =
     useState<AgentSetupScreen | null>(null);
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
+  const [githubManagerAgentId, setGithubManagerAgentId] = useState<
+    string | null
+  >(null);
   const [lifecycleBusyAgentId, setLifecycleBusyAgentId] = useState<string | null>(
     null,
   );
@@ -157,20 +204,62 @@ export default function App() {
   );
 
   const reportSession = useCallback(
-    (id: string, session: ManagedSession) =>
+    (id: string, session: ManagedSession) => {
+      sessionCommandsRef.current[id] = session;
       setSessions((current) =>
         current[id] === session ? current : { ...current, [id]: session },
-      ),
+      );
+      return () => {
+        if (sessionCommandsRef.current[id] === session) {
+          delete sessionCommandsRef.current[id];
+        }
+      };
+    },
     [],
   );
   const session = sessions[agent.id] ?? EMPTY_SESSION;
+  const gitAuthRequiredAgent = settings.agents.find(
+    (profile) => sessions[profile.id]?.gitAuthState === "required",
+  );
   const activeAgentConfigured = isAgentEndpointConfigured(agent);
 
   const selectedHarness =
     HARNESSES.find((h) => h.id === runtime.harness) ?? HARNESSES[0]!;
+  const githubCredentials = credentials.filter(
+    (entry) => entry.kind === "github-token" || entry.kind === "git-pat",
+  );
+  const agentGithubCredential = githubCredentials.find(
+    (entry) => entry.id === agent.gitCredentialId,
+  );
+  const githubManagerAgent = settings.agents.find(
+    (profile) => profile.id === githubManagerAgentId,
+  );
+  const githubManagerCredential = githubCredentials.find(
+    (entry) => entry.id === githubManagerAgent?.gitCredentialId,
+  );
   const gatewayCredentialSignature = settings.agents
     .map((profile) => `${profile.id}:${profile.gatewayCredentialId ?? ""}`)
     .join("|");
+  const disconnectedGithubCheckpointSignature = settings.agents
+    .filter(
+      (profile) =>
+        profile.gitCredentialState === "disconnected" &&
+        profile.origin?.kind === "provider",
+    )
+    .map((profile) => profile.id)
+    .join("|");
+
+  useEffect(() => {
+    for (const profile of settings.agents) {
+      if (
+        profile.gitCredentialState !== "disconnected" ||
+        profile.origin?.kind !== "provider"
+      ) {
+        continue;
+      }
+      void syncRailwayRepositoryTemplate(profile).catch(() => undefined);
+    }
+  }, [disconnectedGithubCheckpointSignature]);
 
   const patch = (partial: Partial<DeviceSettings>) =>
     setSettings((prev) => ({ ...prev, ...partial }));
@@ -199,6 +288,7 @@ export default function App() {
 
   const selectAgent = (id: string) => {
     setPttHeld(false);
+    githubRepositoryRequestRef.current += 1;
     setSettings((prev) => ({
       ...prev,
       activeAgentId: id,
@@ -208,6 +298,7 @@ export default function App() {
     setGithubRepositories([]);
     setGithubRepositoryCredentialId(undefined);
     setGithubSearch("");
+    setGithubManagerAgentId(null);
   };
 
   const addAgent = () => {
@@ -218,6 +309,19 @@ export default function App() {
   const editAgent = (id: string) => {
     selectAgent(id);
     setEditingAgentId(id);
+  };
+
+  const openGithubManager = (id: string) => {
+    const profile = settings.agents.find((candidate) => candidate.id === id);
+    if (!profile) return;
+    selectAgent(id);
+    setEditingAgentId(null);
+    setGithubManagerAgentId(id);
+    if (profile.gitCredentialId) {
+      void loadGithubRepositoriesForCredential(profile.gitCredentialId).catch(
+        () => undefined,
+      );
+    }
   };
 
   const openAgentMenu = (id: string) => {
@@ -237,6 +341,12 @@ export default function App() {
     const stopped = (profile.desiredState ?? "running") === "stopped";
     Alert.alert(profile.name, undefined, [
       settingsAction,
+      {
+        text: profile.gitCredentialId
+          ? "Startup repositories"
+          : "Connect GitHub",
+        onPress: () => openGithubManager(id),
+      },
       {
         text: stopped ? "Start new session" : "End session",
         style: stopped ? "default" : "destructive",
@@ -321,7 +431,9 @@ export default function App() {
     setAgentSetupScreen(null);
     setEditingAgentId(agentId);
     setConfigOk(true);
-    setConfigMsg("Hosted agent is online. Configure its runtime.");
+    setConfigMsg(
+      "Hosted agent is online. Confirm startup repositories, then its runtime.",
+    );
   }, [setSettings]);
 
   const providerRegistry = useProviderRegistry({
@@ -342,12 +454,11 @@ export default function App() {
       busy: githubBusy,
       search: githubSearch,
       onSearchChange: setGithubSearch,
-      onSelectCredential: (entry) =>
-        loadGithubRepositoriesForCredential(entry.id),
       onRefresh: async () => {
         if (!githubRepositoryCredentialId) return [];
         return loadGithubRepositoriesForCredential(githubRepositoryCredentialId);
       },
+      onConnectGithub: () => connectGithub(),
     },
   });
 
@@ -532,67 +643,56 @@ export default function App() {
   async function loadGithubRepositoriesForCredential(
     credentialId: string,
   ): Promise<AttachedRepository[]> {
+    const request = ++githubRepositoryRequestRef.current;
     setGithubBusy(true);
     try {
       const token = await githubAccessToken(credentialId);
       const repositories = await listGithubRepositories(token);
+      if (request !== githubRepositoryRequestRef.current) return repositories;
       setGithubRepositories(repositories);
       setGithubRepositoryCredentialId(credentialId);
       setConfigOk(true);
       setConfigMsg(`Loaded ${repositories.length} GitHub repositories.`);
       return repositories;
     } catch (err) {
+      if (request !== githubRepositoryRequestRef.current) throw err;
       setConfigOk(false);
       setConfigMsg(
         err instanceof Error ? err.message : "Could not load repositories.",
       );
       throw err;
     } finally {
-      setGithubBusy(false);
+      if (request === githubRepositoryRequestRef.current) {
+        setGithubBusy(false);
+      }
     }
   }
 
-  async function selectGitCredential(entry: CredentialEntry) {
-    const repositories = await loadGithubRepositoriesForCredential(
-      entry.id,
-    ).catch(() => null);
-    if (!repositories) return;
-    const accessibleIds = new Set(repositories.map((repo) => repo.id));
-    setSettings((previous) => {
-      const current = activeAgent(previous);
-      return {
-        ...previous,
-        agents: previous.agents.map((profile) =>
-          profile.id === current.id
-            ? {
-                ...profile,
-                gitCredentialId: entry.id,
-                repositories: (profile.repositories ?? []).filter((repo) =>
-                  accessibleIds.has(repo.id),
-                ),
-                runtime: {
-                  ...(profile.runtime ?? {}),
-                  repoUrl: "github.com",
-                },
-              }
-            : profile,
-        ),
-      };
-    });
-  }
-
-  async function loadGithubRepositories() {
-    if (!agent.gitCredentialId) {
-      setConfigOk(false);
-      setConfigMsg("Connect a GitHub account first.");
-      return;
+  function authorizeLiveSessions(
+    credentialId: string,
+    token: string,
+    targetAgentId?: string,
+  ) {
+    for (const profile of settings.agents) {
+      const assigned =
+        profile.gitCredentialId === credentialId ||
+        profile.id === targetAgentId;
+      if (!assigned) continue;
+      const live = sessionCommandsRef.current[profile.id];
+      if (!live) continue;
+      live.sendGitAuth(token);
     }
-    await loadGithubRepositoriesForCredential(agent.gitCredentialId).catch(
-      () => undefined,
-    );
   }
 
-  async function connectGithub(): Promise<{
+  function cancelGithubDeviceAuth() {
+    githubConnectGenerationRef.current += 1;
+    githubDeviceAuthAbortRef.current?.abort();
+    githubDeviceAuthAbortRef.current = null;
+    setGithubDeviceAuth(null);
+    setGithubBusy(false);
+  }
+
+  async function connectGithub(targetAgentId?: string): Promise<{
     credential: CredentialEntry;
     repositories: AttachedRepository[];
   } | null> {
@@ -601,40 +701,51 @@ export default function App() {
       setConfigMsg("Build the app with EXPO_PUBLIC_GITHUB_CLIENT_ID.");
       return null;
     }
+    if (githubDeviceAuthAbortRef.current) {
+      githubDeviceAuthAbortRef.current.abort();
+    }
+    const generation = ++githubConnectGenerationRef.current;
+    const ensureCurrent = () => {
+      if (generation !== githubConnectGenerationRef.current) {
+        throw new Error("GitHub connection cancelled");
+      }
+    };
     setGithubBusy(true);
     const authorizationAbort = new AbortController();
+    githubDeviceAuthAbortRef.current = authorizationAbort;
     try {
       const authorization = await requestGithubDeviceCode(GITHUB_CLIENT_ID);
-      Alert.alert(
-        "Connect GitHub",
-        `Enter code ${authorization.userCode} on GitHub.`,
-        [
-          {
-            text: "Cancel",
-            style: "cancel",
-            onPress: () => authorizationAbort.abort(),
-          },
-          {
-            text: "Open GitHub",
-            onPress: () =>
-              void Linking.openURL(
-                authorization.verificationUriComplete ??
-                  authorization.verificationUri,
-              ),
-          },
-        ],
-        { cancelable: false },
-      );
+      ensureCurrent();
+      if (authorizationAbort.signal.aborted) {
+        throw new Error("GitHub connection cancelled");
+      }
+      if (!authorization.userCode.trim()) {
+        throw new Error("GitHub did not return a device code");
+      }
+      setGithubDeviceAuth(authorization);
       const githubCredential = await pollGithubDeviceToken(
         GITHUB_CLIENT_ID,
         authorization,
-        { signal: authorizationAbort.signal },
+        {
+          signal: authorizationAbort.signal,
+          // Safari/device approval usually happens while the app is
+          // backgrounded; wake the wait as soon as we are active again.
+          onWake: (wake) => {
+            const subscription = AppState.addEventListener(
+              "change",
+              (state) => {
+                if (state === "active") wake();
+              },
+            );
+            return () => subscription.remove();
+          },
+        },
       );
+      ensureCurrent();
+      setGithubDeviceAuth(null);
       const token = githubCredential.accessToken;
-      const [identity, repositories] = await Promise.all([
-        fetchGithubIdentity(token),
-        listGithubRepositories(token),
-      ]);
+      const identity = await fetchGithubIdentity(token);
+      ensureCurrent();
       const label = `GitHub — ${identity.login}`;
       const existing = (await credentialVault.list()).find(
         (candidate) =>
@@ -646,30 +757,227 @@ export default function App() {
         label,
         secret: serializeGithubCredential(githubCredential),
       });
+      ensureCurrent();
+      setCredentials((previous) => [
+        ...previous.filter((candidate) => candidate.id !== entry.id),
+        entry,
+      ]);
+      setGithubRepositories([]);
+      setGithubRepositoryCredentialId(entry.id);
+      if (targetAgentId) {
+        const currentProfile =
+          settingsRef.current.agents.find(
+            (profile) => profile.id === targetAgentId,
+          );
+        if (!currentProfile) {
+          throw new Error("The agent being connected is no longer available");
+        }
+        const connectedProfile = bindAgentGithubIdentity(
+          currentProfile,
+          entry.id,
+        );
+        setSettings((previous) => ({
+          ...previous,
+          agents: previous.agents.map((profile) =>
+            profile.id === targetAgentId
+              ? bindAgentGithubIdentity(profile, entry.id)
+              : profile,
+          ),
+        }));
+        await syncRailwayRepositoryTemplate(connectedProfile);
+      }
+      await refreshCredentials();
+      ensureCurrent();
+      // Same-login reconnect reuses the credential id — bump epoch so live
+      // sessions re-send the fresh token immediately.
+      setGitAuthEpoch((value) => value + 1);
+      authorizeLiveSessions(entry.id, token, targetAgentId);
+      if (targetAgentId) {
+        setGithubManagerAgentId(targetAgentId);
+      }
+      setConfigOk(true);
+      setConfigMsg(
+        `Connected GitHub as ${identity.login}. Loading repositories…`,
+      );
+
+      const repositoryRequest = ++githubRepositoryRequestRef.current;
+      let repositories: AttachedRepository[];
+      try {
+        repositories = await listGithubRepositories(token);
+        ensureCurrent();
+        if (repositoryRequest !== githubRepositoryRequestRef.current) {
+          return { credential: entry, repositories };
+        }
+      } catch {
+        ensureCurrent();
+        setConfigOk(false);
+        setConfigMsg(
+          `Connected GitHub as ${identity.login}, but repositories could not be loaded. Tap Refresh to retry.`,
+        );
+        return { credential: entry, repositories: [] };
+      }
+
       setGithubRepositories(repositories);
       setGithubRepositoryCredentialId(entry.id);
-      await refreshCredentials();
+      if (targetAgentId) {
+        const currentProfile =
+          settingsRef.current.agents.find(
+            (profile) => profile.id === targetAgentId,
+          );
+        if (currentProfile) {
+          const connectedProfile = connectAgentGithub(
+            currentProfile,
+            entry.id,
+            repositories,
+          );
+          setSettings((previous) => ({
+            ...previous,
+            agents: previous.agents.map((profile) =>
+              profile.id === targetAgentId
+                ? connectAgentGithub(profile, entry.id, repositories)
+                : profile,
+            ),
+          }));
+          await syncRailwayRepositoryTemplate(connectedProfile);
+        }
+      }
       setConfigOk(true);
-      setConfigMsg(`Connected GitHub as ${identity.login}.`);
+      setConfigMsg(
+        `Connected GitHub as ${identity.login}. Choose startup repositories for this agent.`,
+      );
       return { credential: entry, repositories };
     } catch (err) {
+      if (
+        err instanceof Error &&
+        err.message === "GitHub connection cancelled"
+      ) {
+        setConfigOk(false);
+        setConfigMsg("GitHub connection cancelled.");
+        return null;
+      }
       setConfigOk(false);
       setConfigMsg(
         err instanceof Error ? err.message : "GitHub connection failed.",
       );
       return null;
     } finally {
-      setGithubBusy(false);
+      if (githubDeviceAuthAbortRef.current === authorizationAbort) {
+        githubDeviceAuthAbortRef.current = null;
+        setGithubDeviceAuth(null);
+      }
+      if (generation === githubConnectGenerationRef.current) {
+        setGithubBusy(false);
+      }
     }
   }
 
-  function toggleRepository(repository: AttachedRepository) {
-    const selected = agent.repositories ?? [];
-    patchActiveAgent({
-      repositories: selected.some((item) => item.id === repository.id)
-        ? selected.filter((item) => item.id !== repository.id)
-        : [...selected, repository],
+  function toggleRepository(
+    repository: AttachedRepository,
+    agentId = githubManagerAgentId ?? agent.id,
+  ) {
+    const updatedProfile = new Promise<AgentProfile | undefined>((resolve) => {
+      setSettings((previous) => {
+        let nextProfile: AgentProfile | undefined;
+        const agents = previous.agents.map((candidate) => {
+          if (candidate.id !== agentId) return candidate;
+          nextProfile = toggleAgentRepository(candidate, repository);
+          return nextProfile;
+        });
+        resolve(nextProfile);
+        return nextProfile ? { ...previous, agents } : previous;
+      });
     });
+    void updatedProfile
+      .then((profile) =>
+        profile ? syncRailwayRepositoryTemplate(profile) : undefined,
+      )
+      .catch((error) => {
+        setConfigOk(false);
+        setConfigMsg(
+          error instanceof Error
+            ? error.message
+            : "Could not save startup repositories.",
+        );
+      });
+  }
+
+  function disconnectGithubFromAgent(profile: AgentProfile) {
+    if (!profile.gitCredentialId) return;
+    Alert.alert(
+      "Disconnect GitHub?",
+      "This signs git and gh out of this agent and clears its startup repository selections. Other agents are not affected.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Disconnect",
+          style: "destructive",
+          onPress: () => {
+            void (async () => {
+              const disconnectedProfile = disconnectAgentGithub(profile);
+              const live = sessionCommandsRef.current[profile.id];
+              live?.sendGitAuth("");
+              setSettings((previous) => ({
+                ...previous,
+                agents: previous.agents.map((candidate) =>
+                  candidate.id === profile.id
+                    ? disconnectAgentGithub(candidate)
+                    : candidate,
+                ),
+              }));
+              let checkpointError: unknown;
+              try {
+                await syncRailwayRepositoryTemplate(disconnectedProfile);
+              } catch (error) {
+                checkpointError = error;
+              }
+              setGithubRepositories([]);
+              githubRepositoryRequestRef.current += 1;
+              setGithubRepositoryCredentialId(undefined);
+              setGithubSearch("");
+              setGitAuthEpoch((value) => value + 1);
+              if (checkpointError) {
+                setConfigOk(false);
+                setConfigMsg(
+                  `GitHub disconnected from ${
+                    profile.name.trim() || "this agent"
+                  }. Its provider checkpoint will retry automatically.`,
+                );
+              } else {
+                setConfigOk(true);
+                setConfigMsg(
+                  `GitHub disconnected from ${
+                    profile.name.trim() || "this agent"
+                  }.`,
+                );
+              }
+            })().catch((error) => {
+              setConfigOk(false);
+              setConfigMsg(
+                error instanceof Error
+                  ? error.message
+                  : "Could not disconnect GitHub.",
+              );
+            });
+          },
+        },
+      ],
+    );
+  }
+
+  async function syncRailwayRepositoryTemplate(
+    profile: AgentProfile,
+  ): Promise<void> {
+    if (
+      profile.origin?.kind !== "provider" ||
+      profile.origin.providerId !== "railway"
+    ) {
+      return;
+    }
+    await railwayProvisioningStore.updateGithub(
+      profile.id,
+      profile.gitCredentialId,
+      profile.repositories ?? [],
+    );
   }
 
   async function selectModelCredential(entry: CredentialEntry) {
@@ -715,36 +1023,6 @@ export default function App() {
     selectedHarness.keyEnv,
   ]);
 
-  async function removeCredential(entry: CredentialEntry) {
-    await credentialVault.remove(entry.id);
-    if (activeAgent(settings).gitCredentialId === entry.id) {
-      setGithubRepositories([]);
-    }
-    setSettings((prev) => ({
-      ...prev,
-      gitPat:
-        activeAgent(prev).gitCredentialId === entry.id ? "" : prev.gitPat,
-      modelKeys: Object.fromEntries(
-        Object.entries(prev.modelKeys).filter(
-          ([keyEnv]) =>
-            activeAgent(prev).modelCredentialIds?.[keyEnv] !== entry.id,
-        ),
-      ),
-      agents: prev.agents.map((profile) => ({
-        ...profile,
-        ...(profile.gitCredentialId === entry.id
-          ? { gitCredentialId: undefined }
-          : {}),
-        modelCredentialIds: Object.fromEntries(
-          Object.entries(profile.modelCredentialIds ?? {}).filter(
-            ([, id]) => id !== entry.id,
-          ),
-        ),
-      })),
-    }));
-    refreshCredentials();
-  }
-
   useEffect(() => {
     if (!configMsg) return;
     const timer = setTimeout(() => {
@@ -752,6 +1030,24 @@ export default function App() {
     }, 4_000);
     return () => clearTimeout(timer);
   }, [configMsg]);
+
+  useEffect(() => {
+    if (!editingAgentId || !legacySecretsMigrated) return;
+    if (agent.id !== editingAgentId) return;
+    if (agent.gitCredentialId) {
+      if (githubRepositoryCredentialId === agent.gitCredentialId) return;
+      void loadGithubRepositoriesForCredential(agent.gitCredentialId).catch(
+        () => undefined,
+      );
+      return;
+    }
+  }, [
+    agent.gitCredentialId,
+    agent.id,
+    editingAgentId,
+    githubRepositoryCredentialId,
+    legacySecretsMigrated,
+  ]);
 
   useEffect(() => {
     if (
@@ -895,9 +1191,14 @@ export default function App() {
           throw err;
         }
       }
+      const modelKeys = await resolveProfileModelKeys(
+        profile,
+        settings,
+        credentials,
+      );
       await saveConfig(
         connectionFor(profile, settings.userId),
-        gatewayConfigPatch(),
+        gatewayConfigPatchForProfile(profile, settings, modelKeys),
       );
       if (!provider) {
         patchAgent(profile.id, { desiredState: "running" });
@@ -920,12 +1221,17 @@ export default function App() {
         throw new Error("This provider cannot replace a removed deployment.");
       }
       const replacement = await provider.replaceAgent(profile);
+      const modelKeys = await resolveProfileModelKeys(
+        profile,
+        settings,
+        credentials,
+      );
       await saveConfig(
         {
           ...connectionFor(profile, settings.userId),
           gatewayUrl: replacement.gatewayUrl,
         },
-        gatewayConfigPatch(),
+        gatewayConfigPatchForProfile(profile, settings, modelKeys),
       );
       setConfigOk(true);
       setConfigMsg("Replacement deployment is online.");
@@ -1042,6 +1348,27 @@ export default function App() {
 
   const agentConfiguration = (
     <>
+      <SectionLabel icon={<LinkIcon size={13} color={color.textMuted} />}>
+        GitHub
+      </SectionLabel>
+      <AgentGithubSummary
+        assigned={Boolean(agent.gitCredentialId)}
+        credential={agentGithubCredential}
+        repositories={agent.repositories ?? []}
+        authState={session.gitAuthState}
+        authMessage={session.gitAuthMessage}
+        busy={githubBusy}
+        onConnect={() => {
+          void connectGithub(agent.id);
+        }}
+        onManage={() => openGithubManager(agent.id)}
+      />
+      {!GITHUB_CLIENT_ID ? (
+        <Text style={styles.githubConfigWarning}>
+          This app build is missing its GitHub OAuth client ID.
+        </Text>
+      ) : null}
+
       <SectionLabel icon={<MicIcon size={13} color={color.textMuted} />}>
         Agent runtime
       </SectionLabel>
@@ -1106,37 +1433,6 @@ export default function App() {
         </Card>
       ) : null}
 
-      <SectionLabel icon={<LinkIcon size={13} color={color.textMuted} />}>
-        Startup repositories
-      </SectionLabel>
-      <GithubRepositoryPicker
-        credentials={credentials.filter(
-          (entry) =>
-            entry.kind === "github-token" || entry.kind === "git-pat",
-        )}
-        selectedCredentialId={agent.gitCredentialId}
-        repositories={githubRepositories}
-        selectedRepositories={agent.repositories ?? []}
-        busy={githubBusy}
-        search={githubSearch}
-        onSearchChange={setGithubSearch}
-        onManageAccounts={() => setShowAppSettings(true)}
-        onSelectCredential={(entry) =>
-          void selectGitCredential(entry).catch(() => undefined)
-        }
-        onRefresh={() => void loadGithubRepositories()}
-        onToggleRepository={toggleRepository}
-      />
-      <Text style={styles.note}>
-        Startup repository changes apply the next time you start a session; they
-        do not require a new Railway deployment.
-      </Text>
-      {!GITHUB_CLIENT_ID ? (
-        <Text style={styles.githubConfigWarning}>
-          This app build is missing its GitHub OAuth client ID.
-        </Text>
-      ) : null}
-
       <SectionLabel icon={<WaveIcon size={13} color={color.textMuted} />}>
         Voice
       </SectionLabel>
@@ -1176,6 +1472,10 @@ export default function App() {
   return (
     <View style={styles.root}>
       <StatusBar style="light" />
+      <GithubDeviceAuthModal
+        authorization={githubDeviceAuth}
+        onCancel={cancelGithubDeviceAuth}
+      />
       {settings.agents.map((profile) => (
         <VoiceSessionController
           key={profile.id}
@@ -1186,6 +1486,7 @@ export default function App() {
           focused={profile.id === settings.activeAgentId}
           mode={mode}
           lifecycleBusy={lifecycleBusyAgentId === profile.id}
+          gitAuthEpoch={gitAuthEpoch}
           onChange={reportSession}
         />
       ))}
@@ -1205,15 +1506,38 @@ export default function App() {
             setConfigOk(true);
             setConfigMsg("App credentials saved on this phone.");
           }}
-          githubCredentials={credentials.filter(
-            (entry) =>
-              entry.kind === "github-token" || entry.kind === "git-pat",
-          )}
-          githubBusy={githubBusy}
-          onConnectGithub={async () => {
-            await connectGithub();
+        />
+      ) : githubManagerAgent ? (
+        <GithubRepositoryManagerScreen
+          credential={githubManagerCredential}
+          credentials={githubCredentials}
+          repositories={githubRepositories}
+          selectedRepositories={githubManagerAgent.repositories ?? []}
+          busy={githubBusy}
+          search={githubSearch}
+          onSearchChange={setGithubSearch}
+          onConnect={() => {
+            void connectGithub(githubManagerAgent.id);
           }}
-          onRemoveGithubCredential={(entry) => void removeCredential(entry)}
+          onRefresh={() => {
+            if (!githubManagerAgent.gitCredentialId) return;
+            void loadGithubRepositoriesForCredential(
+              githubManagerAgent.gitCredentialId,
+            ).catch(() => undefined);
+          }}
+          onToggleRepository={(repository) =>
+            toggleRepository(repository, githubManagerAgent.id)
+          }
+          onSwitchAccount={() => {
+            void connectGithub(githubManagerAgent.id);
+          }}
+          onDisconnect={() =>
+            disconnectGithubFromAgent(githubManagerAgent)
+          }
+          onBack={() => {
+            setGithubManagerAgentId(null);
+            setEditingAgentId(githubManagerAgent.id);
+          }}
         />
       ) : editingAgent && editingTrayItem ? (
         <AgentDetailScreen
@@ -1310,8 +1634,6 @@ export default function App() {
         </Pressable>
       </View>
 
-      {configMsg ? <Toast message={configMsg} ok={configOk} /> : null}
-
       <View style={styles.screen}>
           <AgentTray
             agents={settings.agents
@@ -1332,6 +1654,19 @@ export default function App() {
 
           {!firstLaunch ? (
             <>
+          {gitAuthRequiredAgent ? (
+            <Card>
+              <Text style={styles.note}>
+                {sessions[gitAuthRequiredAgent.id]?.gitAuthMessage ||
+                  "GitHub authorization expired; connect GitHub again."}
+              </Text>
+              <Button
+                tone="primary"
+                label={`Reconnect GitHub for ${gitAuthRequiredAgent.name}`}
+                onPress={() => openGithubManager(gitAuthRequiredAgent.id)}
+              />
+            </Card>
+          ) : null}
           <Segmented<VoiceMode>
             value={mode}
             onChange={setMode}
@@ -1410,6 +1745,11 @@ export default function App() {
       </View>
         </>
       )}
+      {configMsg ? (
+        <View pointerEvents="none" style={styles.toastOverlay}>
+          <Toast message={configMsg} ok={configOk} />
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -1422,6 +1762,7 @@ function VoiceSessionController({
   focused,
   mode,
   lifecycleBusy,
+  gitAuthEpoch,
   onChange,
 }: {
   profile: AgentProfile;
@@ -1431,7 +1772,8 @@ function VoiceSessionController({
   focused: boolean;
   mode: VoiceMode;
   lifecycleBusy: boolean;
-  onChange: (id: string, session: ManagedSession) => void;
+  gitAuthEpoch: number;
+  onChange: (id: string, session: ManagedSession) => () => void;
 }) {
   const conn = useMemo(
     () => ({
@@ -1475,19 +1817,23 @@ function VoiceSessionController({
       session.disconnect,
       session.events,
       session.generationId,
+      session.gitAuthMessage,
+      session.gitAuthState,
       session.harness,
       session.lastError,
+      session.markGitAuthRequired,
       session.pttEnd,
       session.pttStart,
       session.provisioning,
+      session.sendGitAuth,
       session.speaking,
       session.status,
       session.working,
     ],
   );
 
-  useEffect(() => {
-    onChange(profile.id, managed);
+  useLayoutEffect(() => {
+    return onChange(profile.id, managed);
   }, [managed, onChange, profile.id]);
 
   useEffect(() => {
@@ -1518,6 +1864,49 @@ function VoiceSessionController({
     session.connect,
     session.disconnect,
     session.lastError,
+    session.status,
+  ]);
+
+  // Keep the live box logged into GitHub (or signed out) as phone credentials change.
+  useEffect(() => {
+    let cancelled = false;
+    const sync = async () => {
+      if (!profile.gitCredentialId) {
+        session.sendGitAuth("");
+        return;
+      }
+      try {
+        const token = await githubAccessToken(profile.gitCredentialId);
+        if (cancelled) return;
+        session.sendGitAuth(token);
+      } catch (error) {
+        if (cancelled) return;
+        session.sendGitAuth("");
+        session.markGitAuthRequired(
+          error instanceof Error
+            ? error.message
+            : "GitHub authorization expired; connect GitHub again",
+        );
+      }
+    };
+    void sync();
+    if (session.status === "disconnected") {
+      return () => {
+        cancelled = true;
+      };
+    }
+    const timer = setInterval(() => {
+      void sync();
+    }, 5 * 60 * 1_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [
+    gitAuthEpoch,
+    profile.gitCredentialId,
+    session.markGitAuthRequired,
+    session.sendGitAuth,
     session.status,
   ]);
 
@@ -1615,11 +2004,13 @@ function agentTrayItem(
   const status = agentDisplayState(profile, session);
   const runtime = resolveAgentRuntimeSettings(profile, settings);
   const host = providerLabel ?? "Existing host";
-  const repositoryCount = profile.repositories?.length ?? 0;
+  const startupRepos = profile.repositories ?? [];
   const repositories =
-    repositoryCount > 0
-      ? ` · ${repositoryCount} startup repo${repositoryCount === 1 ? "" : "s"}`
-      : "";
+    startupRepos.length === 0
+      ? ""
+      : startupRepos.length === 1
+        ? ` · ${startupRepos[0]!.fullName}`
+        : ` · ${startupRepos[0]!.fullName} +${startupRepos.length - 1}`;
   return {
     id: profile.id,
     name: profile.name.trim() || "Untitled agent",
@@ -1854,6 +2245,14 @@ const styles = StyleSheet.create({
     backgroundColor: color.bg,
     paddingTop: inset.top,
     paddingBottom: inset.bottom,
+  },
+  toastOverlay: {
+    position: "absolute",
+    top: inset.top,
+    left: 0,
+    right: 0,
+    zIndex: 1000,
+    elevation: 1000,
   },
   header: {
     flexDirection: "row",
