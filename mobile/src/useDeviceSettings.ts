@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createSettingsStore,
   DEFAULT_DEVICE_SETTINGS,
@@ -17,12 +17,28 @@ export function useDeviceSettings(
   setSettings: (
     next: DeviceSettings | ((prev: DeviceSettings) => DeviceSettings),
   ) => void;
+  getSettings: () => DeviceSettings;
 } {
-  const [settings, setSettings] = useState<DeviceSettings>(DEFAULT_DEVICE_SETTINGS);
+  const [settings, setSettingsState] = useState<DeviceSettings>(
+    DEFAULT_DEVICE_SETTINGS,
+  );
   const [hydrated, setHydrated] = useState(false);
   const settingsRef = useRef(settings);
-  settingsRef.current = settings;
   const persistAllowedRef = useRef(false);
+  const setSettings = useCallback(
+    (
+      next:
+        | DeviceSettings
+        | ((previous: DeviceSettings) => DeviceSettings),
+    ) => {
+      const resolved =
+        typeof next === "function" ? next(settingsRef.current) : next;
+      settingsRef.current = resolved;
+      setSettingsState(resolved);
+    },
+    [],
+  );
+  const getSettings = useCallback(() => settingsRef.current, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -35,7 +51,7 @@ export function useDeviceSettings(
     return () => {
       cancelled = true;
     };
-  }, [store]);
+  }, [setSettings, store]);
 
   useEffect(() => {
     if (!hydrated || !persistAllowedRef.current) return;
@@ -56,5 +72,5 @@ export function useDeviceSettings(
     };
   }, [store]);
 
-  return { settings, hydrated, setSettings };
+  return { settings, hydrated, setSettings, getSettings };
 }

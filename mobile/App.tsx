@@ -130,29 +130,27 @@ const EMPTY_SESSION: ManagedSession = {
   abort: () => undefined,
 };
 
+async function syncRailwayRepositoryTemplate(
+  profile: AgentProfile,
+): Promise<void> {
+  if (
+    profile.origin?.kind !== "provider" ||
+    profile.origin.providerId !== "railway"
+  ) {
+    return;
+  }
+  await railwayProvisioningStore.updateGithub(
+    profile.id,
+    profile.gitCredentialId,
+    profile.repositories ?? [],
+  );
+}
+
 export default function App() {
   const [mode, setMode] = useState<VoiceMode>("ptt");
   const [pttHeld, setPttHeld] = useState(false);
-  const {
-    settings,
-    setSettings: setStoredSettings,
-    hydrated,
-  } = useDeviceSettings();
-  const settingsRef = useRef(settings);
-  settingsRef.current = settings;
-  const setSettings = useCallback(
-    (
-      next:
-        | DeviceSettings
-        | ((previous: DeviceSettings) => DeviceSettings),
-    ) => {
-      const resolved =
-        typeof next === "function" ? next(settingsRef.current) : next;
-      settingsRef.current = resolved;
-      setStoredSettings(resolved);
-    },
-    [setStoredSettings],
-  );
+  const { settings, setSettings, getSettings, hydrated } =
+    useDeviceSettings();
   const [configMsg, setConfigMsg] = useState("");
   const [configOk, setConfigOk] = useState(false);
   const [sessions, setSessions] = useState<Record<string, ManagedSession>>({});
@@ -766,7 +764,7 @@ export default function App() {
       setGithubRepositoryCredentialId(entry.id);
       if (targetAgentId) {
         const currentProfile =
-          settingsRef.current.agents.find(
+          getSettings().agents.find(
             (profile) => profile.id === targetAgentId,
           );
         if (!currentProfile) {
@@ -821,7 +819,7 @@ export default function App() {
       setGithubRepositoryCredentialId(entry.id);
       if (targetAgentId) {
         const currentProfile =
-          settingsRef.current.agents.find(
+          getSettings().agents.find(
             (profile) => profile.id === targetAgentId,
           );
         if (currentProfile) {
@@ -964,22 +962,6 @@ export default function App() {
     );
   }
 
-  async function syncRailwayRepositoryTemplate(
-    profile: AgentProfile,
-  ): Promise<void> {
-    if (
-      profile.origin?.kind !== "provider" ||
-      profile.origin.providerId !== "railway"
-    ) {
-      return;
-    }
-    await railwayProvisioningStore.updateGithub(
-      profile.id,
-      profile.gitCredentialId,
-      profile.repositories ?? [],
-    );
-  }
-
   async function selectModelCredential(entry: CredentialEntry) {
     const secret = await credentialVault.getSecret(entry.id);
     if (secret == null) return;
@@ -1049,6 +1031,25 @@ export default function App() {
     legacySecretsMigrated,
   ]);
 
+  function gatewayConfigPatch(next: DeviceSettings = settings) {
+    const profile = activeAgent(next);
+    return gatewayConfigPatchForProfile(profile, next, next.modelKeys);
+  }
+
+  async function persistActiveGatewayToken() {
+    if (!agent.token.trim()) return;
+    const entry = await credentialVault.save({
+      id: agent.gatewayCredentialId,
+      kind: "gateway-token",
+      label: `${agent.name.trim() || "Agent"} gateway`,
+      secret: agent.token,
+    });
+    if (entry.id !== agent.gatewayCredentialId) {
+      patchActiveAgent({ gatewayCredentialId: entry.id });
+    }
+    refreshCredentials();
+  }
+
   useEffect(() => {
     if (
       !hydrated ||
@@ -1106,11 +1107,6 @@ export default function App() {
     };
   }, [conn, runtime.harness, session.status]);
 
-  function gatewayConfigPatch(next: DeviceSettings = settings) {
-    const profile = activeAgent(next);
-    return gatewayConfigPatchForProfile(profile, next, next.modelKeys);
-  }
-
   function selectModelOverride(id: string) {
     const efforts = catalogModelEfforts(modelCatalog, id);
     const effort = efforts.includes(runtime.effort) ? runtime.effort : "";
@@ -1123,20 +1119,6 @@ export default function App() {
     if (runtime.effort === id) return;
     const next = withActiveAgentRuntime(settings, { effort: id });
     setSettings(next);
-  }
-
-  async function persistActiveGatewayToken() {
-    if (!agent.token.trim()) return;
-    const entry = await credentialVault.save({
-      id: agent.gatewayCredentialId,
-      kind: "gateway-token",
-      label: `${agent.name.trim() || "Agent"} gateway`,
-      secret: agent.token,
-    });
-    if (entry.id !== agent.gatewayCredentialId) {
-      patchActiveAgent({ gatewayCredentialId: entry.id });
-    }
-    refreshCredentials();
   }
 
   async function stopAgent(profile: AgentProfile) {
