@@ -206,12 +206,12 @@ jobs:
     name: Publish runtime image
     needs: [ci, changes]
     if: >-
-      (github.event_name == 'push' ||
+      needs.ci.result == 'success' &&
+      ((github.event_name == 'push' &&
+        needs.changes.outputs.image == 'true') ||
        (github.event_name == 'workflow_dispatch' &&
         github.ref == 'refs/heads/main' &&
-        inputs.publish_image)) &&
-      needs.ci.result == 'success' &&
-      needs.changes.outputs.image == 'true'
+        inputs.publish_image))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
