@@ -204,9 +204,11 @@ jobs:
 
   publish:
     name: Publish runtime image
-    needs: [ci, changes]
+    needs: [runtime, changes]
     if: >-
-      needs.ci.result == 'success' &&
+      always() &&
+      needs.runtime.result == 'success' &&
+      needs.changes.result == 'success' &&
       ((github.event_name == 'push' &&
         needs.changes.outputs.image == 'true') ||
        (github.event_name == 'workflow_dispatch' &&
