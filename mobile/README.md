@@ -62,8 +62,10 @@ that new deployment's host variables by its provider plugin.
 Connection fields (URL / token / user id) are device-only; the gateway never
 stores them for you.
 
-`localhost` on a phone is the phone itself, not your laptop. Use a LAN IP
-(`http://192.168.x.x:4100`) or an `https://` URL in front of the gateway.
+`localhost` on a phone is the phone itself, not your laptop. The iOS Simulator
+on the same Mac can use `http://127.0.0.1:4100`. A physical phone should use
+the Tailscale Serve URL from that Mac (`https://<machine>.<tailnet>.ts.net`),
+not a LAN IP.
 
 ## Provider plugins
 

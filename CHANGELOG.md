@@ -20,6 +20,8 @@ Notable changes are recorded here. This project follows semantic versioning.
   segment of one utterance. TTS verbalizes numbers while transcripts keep digits.
 - Voice sockets and HTTP routes accept `Authorization: Bearer` only. Query-string
   `token=` is rejected so the secret is not logged in request URLs.
+- Compose publishes the gateway on `127.0.0.1:4100` only. A phone reaches a
+  laptop-hosted agent through Tailscale Serve, not a LAN or public bind.
 - Runtime images publish only after all required checks pass and now include
   OCI provenance and an SBOM.
 - Gateway and mobile code use deterministic ESLint checks.
