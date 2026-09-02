@@ -3,6 +3,9 @@ import type { TtsStream } from "./voice-providers.js";
 
 export type { TtsStream } from "./voice-providers.js";
 
+export const ELEVENLABS_TTS_INACTIVITY_TIMEOUT_SEC = 180;
+export const ELEVENLABS_TTS_KEEPALIVE_MS = 10_000;
+
 /** Minimal transport so tests can drive the CONNECTING/open/finish sequence. */
 export interface TtsTransport {
   readyState: number;
@@ -11,6 +14,7 @@ export interface TtsTransport {
   on(event: "open", cb: () => void): this;
   on(event: "message", cb: (raw: { toString(): string }) => void): this;
   on(event: "error", cb: (err: Error) => void): this;
+  on(event: "close", cb: () => void): this;
   once(event: "open", cb: () => void): this;
   removeAllListeners(event?: string): this;
 }
@@ -23,7 +27,8 @@ export function elevenLabsStreamUrl(voiceId: string): string {
   const voice = encodeURIComponent(voiceId);
   return (
     `wss://api.elevenlabs.io/v1/text-to-speech/${voice}/stream-input` +
-    `?model_id=eleven_flash_v2_5&output_format=${TTS_OUTPUT_FORMAT}`
+    `?model_id=eleven_flash_v2_5&output_format=${TTS_OUTPUT_FORMAT}` +
+    `&inactivity_timeout=${ELEVENLABS_TTS_INACTIVITY_TIMEOUT_SEC}`
   );
 }
 
@@ -36,6 +41,10 @@ export function elevenLabsStreamUrl(voiceId: string): string {
  * the socket is still CONNECTING. `finish()` before open is held until after
  * that flush. `close()` discards the buffer so an abort during CONNECTING
  * cannot send dead-turn text.
+ *
+ * Tool-call gaps pause LLM text. Default inactivity is 20s (`input_timeout_exceeded`).
+ * Keep the socket alive, and use `flush()` (not EOS) so already-pushed speech
+ * is generated instead of starving playback mid-utterance.
  */
 export function openElevenLabs(opts: {
   apiKey: string;
@@ -55,15 +64,47 @@ export function attachStreamingTts(
     onAudio: (pcm: Buffer) => void;
     onError: (err: Error) => void;
     onEnd?: () => void;
+    keepaliveMs?: number;
   },
 ): TtsStream {
   const pending: string[] = [];
   let finishRequested = false;
+  let flushRequested = false;
   let opened = false;
   let closed = false;
+  let keepalive: ReturnType<typeof setInterval> | null = null;
+  const keepaliveMs = opts.keepaliveMs ?? ELEVENLABS_TTS_KEEPALIVE_MS;
+
+  const stopKeepalive = () => {
+    if (!keepalive) return;
+    clearInterval(keepalive);
+    keepalive = null;
+  };
+
+  const fail = (error: Error) => {
+    if (closed) return;
+    closed = true;
+    stopKeepalive();
+    pending.length = 0;
+    opts.onError(error);
+    try {
+      ws.close();
+    } catch {
+      /* already closed */
+    }
+  };
+
+  const sendKeepalive = () => {
+    if (closed || finishRequested || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ text: " " }));
+  };
 
   const sendText = (text: string) => {
     ws.send(JSON.stringify({ text: `${text} `, try_trigger_generation: true }));
+  };
+
+  const sendFlush = () => {
+    ws.send(JSON.stringify({ text: " ", flush: true }));
   };
 
   ws.on("open", () => {
@@ -85,7 +126,16 @@ export function attachStreamingTts(
     );
     for (const text of pending) sendText(text);
     pending.length = 0;
-    if (finishRequested) ws.send(JSON.stringify({ text: "" }));
+    if (finishRequested) {
+      stopKeepalive();
+      ws.send(JSON.stringify({ text: "" }));
+      return;
+    }
+    if (flushRequested) {
+      flushRequested = false;
+      sendFlush();
+    }
+    keepalive = setInterval(sendKeepalive, keepaliveMs);
   });
 
   ws.on("message", (raw) => {
@@ -101,16 +151,30 @@ export function attachStreamingTts(
       return;
     }
     if (msg.error) {
-      opts.onError(new Error(msg.error));
+      fail(new Error(msg.error));
       return;
     }
     if (msg.audio) {
       opts.onAudio(Buffer.from(msg.audio, "base64"));
     }
-    if (msg.isFinal) opts.onEnd?.();
+    // Flush completes a generation cycle and can emit isFinal while the
+    // socket stays open for later text (tool-call gaps). Only EOS (`finish`)
+    // is the stream end; treating flush-isFinal as onEnd would null the
+    // AgentTurn handle and starve keepalive.
+    if (msg.isFinal && finishRequested) {
+      stopKeepalive();
+      opts.onEnd?.();
+    }
   });
   ws.on("error", (err) => {
-    if (!closed) opts.onError(err);
+    fail(err);
+  });
+  ws.on("close", () => {
+    if (closed || finishRequested) {
+      stopKeepalive();
+      return;
+    }
+    fail(new Error("tts_ws_closed"));
   });
 
   return {
@@ -122,18 +186,28 @@ export function attachStreamingTts(
         pending.push(text);
       }
     },
+    flush() {
+      if (closed || finishRequested) return;
+      if (opened && ws.readyState === WebSocket.OPEN) {
+        sendFlush();
+        return;
+      }
+      flushRequested = true;
+    },
     finish() {
       if (closed) return;
+      finishRequested = true;
+      stopKeepalive();
       if (opened && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ text: "" }));
-      } else {
-        finishRequested = true;
       }
     },
     close() {
       closed = true;
       pending.length = 0;
       finishRequested = false;
+      flushRequested = false;
+      stopKeepalive();
       try {
         if (ws.readyState === WebSocket.CONNECTING) {
           // Closing a CONNECTING ws throws an async "closed before

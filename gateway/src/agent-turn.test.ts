@@ -44,15 +44,19 @@ function recordingTts(): {
   texts: string[];
   finished: boolean;
   closed: boolean;
+  flushed: number;
 } {
   const texts: string[] = [];
-  const state = { finished: false, closed: false };
+  const state = { finished: false, closed: false, flushed: 0 };
   const factory: OpenTts = (opts) => {
     const stream: TtsStream = {
       pushText(text) {
         if (state.closed) return;
         texts.push(text);
         opts.onAudio(Buffer.from(text));
+      },
+      flush() {
+        state.flushed += 1;
       },
       finish() {
         state.finished = true;
@@ -72,6 +76,9 @@ function recordingTts(): {
     },
     get closed() {
       return state.closed;
+    },
+    get flushed() {
+      return state.flushed;
     },
   };
 }
@@ -262,6 +269,27 @@ describe("AgentTurn", () => {
     await turn.close();
   });
 
+  it("releases held speech and flushes TTS on tool_event without closing the stream", async () => {
+    const tts = recordingTts();
+    const { box, events, turn } = setup(tts.factory);
+    turn.enqueue("lookup");
+    const id = box.prompts()[0].id;
+    box.emit({ type: "chunk", promptId: id, text: "I'll look that up" });
+    assert.deepEqual(tts.texts, []);
+    box.emit({ type: "tool_event", promptId: id, summary: "search" });
+    assert.deepEqual(tts.texts, ["I'll look that up"]);
+    assert.equal(tts.flushed, 1);
+    assert.equal(tts.closed, false);
+    assert.equal(tts.finished, false);
+    assert.equal(
+      events.some((e) => e.type === "tool_event" && e.summary === "search"),
+      true,
+    );
+    box.emit({ type: "chunk", promptId: id, text: " Found it. " });
+    assert.deepEqual(tts.texts, ["I'll look that up", "Found it."]);
+    await turn.close();
+  });
+
   it("stops TTS while unfocused and resumes it for later text", async () => {
     const streams: Array<{ closed: boolean; texts: string[] }> = [];
     const factory: OpenTts = (opts) => {
@@ -276,6 +304,7 @@ describe("AgentTurn", () => {
         finish() {
           opts.onEnd?.();
         },
+        flush() {},
         close() {
           stream.closed = true;
         },
@@ -363,6 +392,7 @@ describe("AgentTurn", () => {
         finish() {
           rec.finished = true;
         },
+        flush() {},
         close() {
           rec.closed = true;
         },
@@ -450,6 +480,7 @@ describe("AgentTurn", () => {
         finish() {
           recs[recs.length - 1].finish();
         },
+        flush() {},
         close() {},
       };
     };
@@ -486,6 +517,7 @@ describe("AgentTurn", () => {
           opts.onAudio(Buffer.from(text));
         },
         finish() {},
+        flush() {},
         close() {},
       };
     };

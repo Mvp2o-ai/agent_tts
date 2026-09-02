@@ -336,6 +336,12 @@ export class AgentTurn {
     if (msg.type === "tool_event") {
       if (this.phase !== "running" || this.muted) return;
       this.sink.sendJson({ type: "tool_event", summary: msg.summary });
+      // Tool calls are a narration boundary, not a barge-in. Release held
+      // phrases and tell ElevenLabs to generate the already-pushed tail so
+      // the speaker is not starved mid-utterance. Do not finish()/close()
+      // the stream and do not dump client playback.
+      this.speakPhrases(this.speech.end());
+      this.tts?.flush();
       return;
     }
 

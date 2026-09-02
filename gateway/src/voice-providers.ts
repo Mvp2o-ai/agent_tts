@@ -18,6 +18,8 @@ export interface SttStream {
 
 export interface TtsStream {
   pushText(text: string): void;
+  /** Force-generate buffered text without closing the socket (not EOS). */
+  flush(): void;
   finish(): void;
   close(): void;
 }

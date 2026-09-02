@@ -27,10 +27,15 @@ class MockTtsSocket extends EventEmitter implements TtsTransport {
     this.emit("open");
   }
 
-  payload(i: number): { text?: string; try_trigger_generation?: boolean } {
+  payload(i: number): {
+    text?: string;
+    try_trigger_generation?: boolean;
+    flush?: boolean;
+  } {
     return JSON.parse(this.sent[i] ?? "{}") as {
       text?: string;
       try_trigger_generation?: boolean;
+      flush?: boolean;
     };
   }
 }
@@ -45,6 +50,10 @@ describe("ElevenLabs output format", () => {
     });
     assert.match(elevenLabsStreamUrl("21m00Tcm4TlvDq8ikWAM"), /output_format=pcm_24000/);
     assert.match(elevenLabsStreamUrl("21m00Tcm4TlvDq8ikWAM"), /model_id=eleven_flash_v2_5/);
+    assert.match(
+      elevenLabsStreamUrl("21m00Tcm4TlvDq8ikWAM"),
+      /inactivity_timeout=180/,
+    );
   });
 });
 
@@ -80,5 +89,72 @@ describe("attachStreamingTts", () => {
     stream.close();
     ws.openNow();
     assert.equal(ws.sent.length, 0);
+  });
+
+  it("flush force-generates buffered text without sending EOS", () => {
+    const ws = new MockTtsSocket();
+    const stream = attachStreamingTts(ws, {
+      apiKey: "test-key",
+      onAudio: () => undefined,
+      onError: () => undefined,
+      keepaliveMs: 60_000,
+    });
+    ws.openNow();
+    stream.pushText("I will look that up.");
+    stream.flush();
+    assert.equal(
+      ws.sent.some((line) => line === JSON.stringify({ text: " ", flush: true })),
+      true,
+    );
+    assert.equal(
+      ws.sent.some((line) => {
+        const msg = JSON.parse(line) as { text?: string };
+        return msg.text === "";
+      }),
+      false,
+    );
+    stream.close();
+  });
+
+  it("does not end the stream on isFinal after flush", () => {
+    const ends: number[] = [];
+    const ws = new MockTtsSocket();
+    const stream = attachStreamingTts(ws, {
+      apiKey: "test-key",
+      onAudio: () => undefined,
+      onError: () => undefined,
+      onEnd: () => ends.push(1),
+      keepaliveMs: 60_000,
+    });
+    ws.openNow();
+    stream.pushText("I will look that up.");
+    stream.flush();
+    ws.emit("message", { toString: () => JSON.stringify({ isFinal: true }) });
+    const afterFlush = ws.sent.length;
+    stream.pushText("Found it.");
+    assert.deepEqual(ends, []);
+    assert.equal(ws.sent.length, afterFlush + 1);
+    stream.finish();
+    ws.emit("message", { toString: () => JSON.stringify({ isFinal: true }) });
+    assert.deepEqual(ends, [1]);
+    stream.close();
+  });
+
+  it("treats input_timeout_exceeded as a dead stream so later text is not pushed", () => {
+    const errors: string[] = [];
+    const ws = new MockTtsSocket();
+    const stream = attachStreamingTts(ws, {
+      apiKey: "test-key",
+      onAudio: () => undefined,
+      onError: (err) => errors.push(err.message),
+      keepaliveMs: 60_000,
+    });
+    ws.openNow();
+    const afterOpen = ws.sent.length;
+    ws.emit("message", { toString: () => JSON.stringify({ error: "input_timeout_exceeded" }) });
+    stream.pushText("after timeout");
+    stream.close();
+    assert.deepEqual(errors, ["input_timeout_exceeded"]);
+    assert.equal(ws.sent.length, afterOpen);
   });
 });
