@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   classifyIncomingFrame,
   connectionError,
+  gatewayAuthHeaders,
   healthUrl,
   httpToWs,
   killSessionUrl,
@@ -29,6 +30,11 @@ describe("protocol", () => {
     assert.match(url, /mode=ptt/);
     assert.match(url, /userId=ken/);
     assert.match(url, /focused=true/);
+    assert.equal(url.includes("secret"), false);
+    assert.doesNotMatch(url, /token=/);
+    assert.deepEqual(gatewayAuthHeaders("secret"), {
+      Authorization: "Bearer secret",
+    });
     const backgroundUrl = voiceUrl(
       {
         gatewayUrl: "https://gw.example",

@@ -57,6 +57,7 @@ describe("VoiceInput", () => {
     input.onStt({ text: "Hard stop.", isFinal: false });
     input.onStt({ text: "Hard.", isFinal: true });
     input.onStt({ text: "list the files", isFinal: true });
+    input.onStt({ text: "", isFinal: true, utteranceEnd: true });
     assert.deepEqual(turn.aborts, ["stop_word"]);
     assert.deepEqual(turn.enqueued, ["list the files"]);
   });
@@ -66,34 +67,53 @@ describe("VoiceInput", () => {
     input.onStt({ text: "Hard stop.", isFinal: false });
     input.onStt({ text: "Hard stop.", isFinal: true });
     input.onStt({ text: "list the files", isFinal: true });
+    input.onStt({ text: "", isFinal: true, utteranceEnd: true });
     assert.deepEqual(turn.enqueued, ["list the files"]);
     assert.equal(turn.aborts.length, 1);
   });
 
-  it("commits a PTT utterance once despite a late final", () => {
+  it("commits a PTT utterance only after the STT flush ends", () => {
     const { turn, input } = setup("ptt");
     input.pttStart();
     input.onStt({ text: "hello repo", isFinal: true });
     assert.deepEqual(turn.enqueued, []);
     input.pttEnd();
+    assert.deepEqual(turn.enqueued, []);
+    input.sttEnd();
     assert.deepEqual(turn.enqueued, ["hello repo"]);
     input.onStt({ text: "hello repo", isFinal: true });
+    input.sttEnd();
     assert.deepEqual(turn.enqueued, ["hello repo"]);
   });
 
-  it("enqueues a late PTT final if none was ready at ptt_end", () => {
+  it("includes a late PTT final flushed after ptt_end", () => {
     const { turn, input } = setup("ptt");
     input.pttStart();
     input.pttEnd();
     input.onStt({ text: "late final", isFinal: true });
+    input.sttEnd();
     assert.deepEqual(turn.enqueued, ["late final"]);
   });
 
-  it("does not double-commit hands-free finals via utteranceEnd", () => {
+  it("joins every finalized PTT segment from one button press", () => {
+    const { turn, input } = setup("ptt");
+    input.pttStart();
+    input.onStt({ text: "one two three four five", isFinal: true });
+    input.onStt({ text: "six seven eight nine ten", isFinal: true });
+    input.pttEnd();
+    input.sttEnd();
+    assert.deepEqual(turn.enqueued, [
+      "one two three four five six seven eight nine ten",
+    ]);
+  });
+
+  it("waits for UtteranceEnd and joins hands-free final segments", () => {
     const { turn, input } = setup();
-    input.onStt({ text: "hello", isFinal: true });
+    input.onStt({ text: "test access", isFinal: true });
+    input.onStt({ text: "to my Gmail", isFinal: true });
+    assert.deepEqual(turn.enqueued, []);
     input.onStt({ text: "", isFinal: true, utteranceEnd: true });
-    assert.deepEqual(turn.enqueued, ["hello"]);
+    assert.deepEqual(turn.enqueued, ["test access to my Gmail"]);
   });
 
   it("barge-in from speech does not abort the turn", () => {
@@ -102,6 +122,7 @@ describe("VoiceInput", () => {
     input.onStt({ text: "", isFinal: false, speechStarted: true });
     input.onStt({ text: "and also", isFinal: false });
     input.onStt({ text: "and also queue this", isFinal: true });
+    input.onStt({ text: "", isFinal: true, utteranceEnd: true });
     assert.equal(turn.aborts.length, 0);
     assert.ok(turn.barges >= 1);
     assert.deepEqual(turn.enqueued, ["and also queue this"]);

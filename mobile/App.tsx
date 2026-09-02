@@ -47,6 +47,7 @@ import {
   type GithubDeviceAuthorization,
 } from "./src/github";
 import { connectionError, normalizeGatewayUrl } from "./src/protocol";
+import { shouldStopHostBeforeNewSession } from "./src/session-refresh";
 import { parseAgentPairingUrl } from "./src/pairing";
 import { useProviderRegistry } from "./src/providers/registry";
 import { railwayProvisioningStore } from "./src/providers/railway/provisioning-store";
@@ -98,9 +99,10 @@ import {
   StopIcon,
   WaveIcon,
 } from "./src/ui/icons";
-import { TalkButton, type TalkState } from "./src/ui/TalkButton";
+import { TalkButton } from "./src/ui/TalkButton";
 import { Transcript } from "./src/ui/Transcript";
 import { color, font, inset, radius, space } from "./src/ui/theme";
+import { resolveTalkState } from "./src/talk-state";
 
 type AgentSetupScreen =
   | "choose"
@@ -114,7 +116,9 @@ const EMPTY_SESSION: ManagedSession = {
   availability: "unknown",
   events: [],
   speaking: false,
+  ttsOpen: false,
   working: false,
+  busyKind: "thinking",
   harness: "",
   generationId: "",
   provisioning: null,
@@ -336,7 +340,6 @@ export default function App() {
       ]);
       return;
     }
-    const stopped = (profile.desiredState ?? "running") === "stopped";
     Alert.alert(profile.name, undefined, [
       settingsAction,
       {
@@ -344,11 +347,6 @@ export default function App() {
           ? "Startup repositories"
           : "Connect GitHub",
         onPress: () => openGithubManager(id),
-      },
-      {
-        text: stopped ? "Start new session" : "End session",
-        style: stopped ? "default" : "destructive",
-        onPress: () => toggleAgentLifecycle(profile),
       },
       { text: "Cancel", style: "cancel" },
     ]);
@@ -1121,7 +1119,7 @@ export default function App() {
     setSettings(next);
   }
 
-  async function stopAgent(profile: AgentProfile) {
+  async function stopAgent(profile: AgentProfile): Promise<boolean> {
     const managed = sessions[profile.id] ?? EMPTY_SESSION;
     setLifecycleBusyAgentId(profile.id);
     patchAgent(profile.id, { desiredState: "stopped" });
@@ -1146,16 +1144,20 @@ export default function App() {
           );
         }
       }
+      return true;
     } catch (err) {
       patchAgent(profile.id, { desiredState: "running" });
       setConfigOk(false);
-      setConfigMsg(err instanceof Error ? err.message : "Could not end session.");
+      setConfigMsg(
+        err instanceof Error ? err.message : "Could not start a new session.",
+      );
+      return false;
     } finally {
       setLifecycleBusyAgentId(null);
     }
   }
 
-  async function startAgent(profile: AgentProfile) {
+  async function startAgent(profile: AgentProfile): Promise<boolean> {
     setLifecycleBusyAgentId(profile.id);
     try {
       const provider = providerRegistry.forProfile(profile);
@@ -1185,14 +1187,27 @@ export default function App() {
       if (!provider) {
         patchAgent(profile.id, { desiredState: "running" });
       }
+      return true;
     } catch (err) {
       setConfigOk(false);
       setConfigMsg(
         err instanceof Error ? err.message : "Could not start a new session.",
       );
+      return false;
     } finally {
       setLifecycleBusyAgentId(null);
     }
+  }
+
+  async function refreshAgentSession(profile: AgentProfile) {
+    if (shouldStopHostBeforeNewSession(profile.desiredState)) {
+      const stopped = await stopAgent(profile);
+      if (!stopped) return;
+    }
+    const started = await startAgent(profile);
+    if (!started) return;
+    setConfigOk(true);
+    setConfigMsg("New session starting.");
   }
 
   async function replaceAgent(profile: AgentProfile) {
@@ -1229,35 +1244,15 @@ export default function App() {
     }
   }
 
-  function toggleAgentLifecycle(profile: AgentProfile) {
-    const desiredState = profile.desiredState ?? "running";
-    if (desiredState === "stopped") {
-      void startAgent(profile);
-      return;
-    }
-    const managed = sessions[profile.id] ?? EMPTY_SESSION;
-    const run = () => void stopAgent(profile);
-    if (!managed.working && !managed.speaking) {
-      run();
-      return;
-    }
-    Alert.alert(
-      "End this session?",
-      "The current instance will be destroyed. Uncommitted and unpushed work will be lost.",
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "End session", style: "destructive", onPress: run },
-      ],
-    );
-  }
-
   const activeDisplayState = agentDisplayState(agent, session);
   const firstLaunch = isBlankDefaultProfile(settings.agents);
   const talkState = resolveTalkState(
     activeDisplayState,
     session.speaking,
     session.working,
+    session.ttsOpen,
     pttHeld,
+    session.busyKind,
   );
   const editingAgent =
     settings.agents.find((profile) => profile.id === editingAgentId) ?? null;
@@ -1531,7 +1526,6 @@ export default function App() {
           }
           statusLabel={trayStatusLabel(editingTrayItem.status)}
           statusTone={trayStatusTone(editingTrayItem.status)}
-          running={(editingAgent.desiredState ?? "running") === "running"}
           gone={editingTrayItem.status === "gone"}
           lifecycleBusy={lifecycleBusyAgentId === editingAgent.id}
           removing={removingAgentId === editingAgent.id}
@@ -1541,7 +1535,7 @@ export default function App() {
             patchAgent(editingAgent.id, { gatewayUrl })
           }
           onTokenChange={(token) => patchAgent(editingAgent.id, { token })}
-          onLifecycle={() => toggleAgentLifecycle(editingAgent)}
+          onNewSession={() => void refreshAgentSession(editingAgent)}
           onReplace={() => void replaceAgent(editingAgent)}
           onRemove={() =>
             Alert.alert(
@@ -1694,7 +1688,7 @@ export default function App() {
             }}
           />
 
-          {session.working || session.speaking ? (
+          {session.working || session.speaking || session.ttsOpen ? (
             <Button
               tone="ghost"
               label="Stop current response"
@@ -1809,8 +1803,10 @@ function VoiceSessionController({
       session.provisioning,
       session.sendGitAuth,
       session.speaking,
+      session.ttsOpen,
       session.status,
       session.working,
+      session.busyKind,
     ],
   );
 
@@ -1900,25 +1896,6 @@ function VoiceSessionController({
   }, [focused, mode, session.connect, session.status]);
 
   return null;
-}
-
-function resolveTalkState(
-  displayState: AgentTrayItem["status"],
-  speaking: boolean,
-  working: boolean,
-  held: boolean,
-): TalkState {
-  if (held) return "capturing";
-  if (speaking) return "speaking";
-  if (displayState === "needs-setup") return "needs-setup";
-  if (displayState === "stopped") return "stopped";
-  if (displayState === "starting") return "starting";
-  if (displayState === "gone") return "gone";
-  if (displayState === "unreachable" || displayState === "error") {
-    return "unreachable";
-  }
-  if (working) return "working";
-  return "idle";
 }
 
 function provisioningLabel(

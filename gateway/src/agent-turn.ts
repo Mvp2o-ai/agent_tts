@@ -3,6 +3,7 @@ import { isTerminal, type BoxInbound, type BoxOutbound } from "./box-protocol.js
 import type { UserConfig } from "./config-schema.js";
 import { PromptQueue } from "./prompt-queue.js";
 import { SpeechBuffer } from "./speech-buffer.js";
+import { verbalizeNumbersForTts } from "./speech-numbers.js";
 import type { TtsAdapter, TtsStream } from "./voice-providers.js";
 
 export type ClientEvent =
@@ -335,6 +336,12 @@ export class AgentTurn {
     if (msg.type === "tool_event") {
       if (this.phase !== "running" || this.muted) return;
       this.sink.sendJson({ type: "tool_event", summary: msg.summary });
+      // Tool calls are a narration boundary, not a barge-in. Release held
+      // phrases and tell ElevenLabs to generate the already-pushed tail so
+      // the speaker is not starved mid-utterance. Do not finish()/close()
+      // the stream and do not dump client playback.
+      this.speakPhrases(this.speech.end());
+      this.tts?.flush();
       return;
     }
 
@@ -424,7 +431,7 @@ export class AgentTurn {
         },
       });
     }
-    for (const p of phrases) this.tts.pushText(p);
+    for (const p of phrases) this.tts.pushText(verbalizeNumbersForTts(p));
   }
 
   private stopTts(): void {

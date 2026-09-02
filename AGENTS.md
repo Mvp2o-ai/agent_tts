@@ -194,45 +194,34 @@ docker compose up -d --build
 curl --fail http://127.0.0.1:4100/health
 ```
 
-The gateway listens on port `4100`. An iOS Simulator on the same Mac can use
-`http://127.0.0.1:4100`; a physical phone must use the host's LAN address or a
-TLS endpoint. The token entered in the app must equal `GATEWAY_TOKEN`.
+The gateway listens on port `4100` on the **host loopback**. An iOS Simulator
+on the same Mac uses `http://127.0.0.1:4100`. A physical phone is not on that
+loopback: put the phone and the Mac on the same Tailscale tailnet and pair the
+Tailscale Serve URL. The token entered in the app must equal `GATEWAY_TOKEN`.
 
-### Expose a laptop-hosted gateway
+### Reach a laptop-hosted gateway from a phone
 
-The app accepts an HTTPS hostname directly and converts it to `wss://` for the
-voice socket. A manually launched agent may instead use a reachable LAN IP and
-port over HTTP; internet-facing agents should use HTTPS/WSS.
+Compose publishes `127.0.0.1:4100` only. That is the private listener. Do not
+change it to `4100:4100` (all interfaces) and do not put the box on the LAN.
 
-For a quick public tunnel with ngrok:
-
-```bash
-ngrok http 4100
-```
-
-For an existing `ngrok start --all` setup, add a named tunnel to ngrok's
-configuration:
-
-```yaml
-tunnels:
-  agent-tts:
-    proto: http
-    addr: 4100
-```
-
-Then start all configured tunnels:
+The app accepts an `https://` hostname and converts it to `wss://` for the
+voice socket. On the Mac, with Tailscale running and HTTPS enabled on the
+tailnet:
 
 ```bash
-ngrok start --all
+tailscale serve --bg 4100
 ```
 
-Put the resulting `https://…ngrok…` URL directly into the active agent's
-**Gateway URL** field in the app. Unreserved ngrok URLs can change when ngrok
-restarts. For regular private use, a stable Tailscale hostname is preferable;
-for an always-on deployment, use a VPS with TLS or a managed host from
-[`docs/deployment/`](./docs/deployment/README.md). Expose only the gateway
-HTTP/WebSocket port, require a strong `GATEWAY_TOKEN`, and never expose the
-Docker socket or Docker API.
+Pair the phone with the printed `https://<machine>.<tailnet>.ts.net` URL and
+the same `GATEWAY_TOKEN`. The iPhone needs the Tailscale app and must be
+logged into that tailnet. The iOS Simulator can keep using
+`http://127.0.0.1:4100` and does not need Serve.
+
+Internet-facing tunnels (ngrok, a public cloud hostname) put a
+bearer-secret host on the public internet. Prefer Tailscale. If you still
+publish a public URL, require a strong `GATEWAY_TOKEN` and never expose the
+Docker socket or Docker API. Managed hosts are documented in
+[`docs/deployment/`](./docs/deployment/README.md).
 
 ## Verification gates
 

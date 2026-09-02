@@ -25,8 +25,12 @@ A host is compatible when it can do all of the following:
    only restarts on non-zero exit will leave the agent dead after a reset.
 6. **TLS + WebSockets.** The mobile app speaks `wss://` to `/v1/voice`. The
    public URL must be HTTPS and must not idle-timeout long-lived WebSockets.
-7. **Bind `PORT` on `0.0.0.0`.** The image already does this. Do not pin
-   `PORT=4100` on hosts that inject `PORT`.
+7. **Bind `PORT` on `0.0.0.0` inside the container.** The image already does
+   this so the platform proxy can reach the process. Do not pin `PORT=4100` on
+   hosts that inject `PORT`. Do not publish that port on the host's public or
+   LAN interfaces; Compose maps `127.0.0.1:4100:4100`. Reach a phone through
+   Tailscale Serve (or another private network), not by binding `0.0.0.0` on
+   the host.
 8. **Health check `GET /health`.** Unauthenticated, HTTP 200, JSON `{ ok: true }`.
 9. **Run the gateway as non-root.** Host volumes are often root-owned. The
    image starts as root only to `chown /data`, then `exec`s as `agent`. Do

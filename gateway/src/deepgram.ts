@@ -21,6 +21,7 @@ export interface SttTransport {
   on(event: "open", cb: () => void): this;
   on(event: "message", cb: (raw: { toString(): string }) => void): this;
   on(event: "error", cb: (err: Error) => void): this;
+  on(event: "close", cb: () => void): this;
   once(event: "open", cb: () => void): this;
   removeAllListeners(event?: string): this;
 }
@@ -29,6 +30,7 @@ export function openDeepgram(opts: {
   apiKey: string;
   onEvent: (ev: TranscriptEvent) => void;
   onError: (err: Error) => void;
+  onEnd: () => void;
 }): SttStream {
   const params = new URLSearchParams({
     model: "nova-2",
@@ -63,6 +65,7 @@ export function attachStreamingStt(
   opts: {
     onEvent: (ev: TranscriptEvent) => void;
     onError: (err: Error) => void;
+    onEnd: () => void;
   },
 ): SttStream {
   const pending: Buffer[] = [];
@@ -70,6 +73,13 @@ export function attachStreamingStt(
   let opened = false;
   let closed = false;
   let finishRequested = false;
+  let endNotified = false;
+
+  const notifyEnd = () => {
+    if (endNotified) return;
+    endNotified = true;
+    opts.onEnd();
+  };
 
   const pushPending = (chunk: Buffer) => {
     if (chunk.length === 0) return;
@@ -151,6 +161,9 @@ export function attachStreamingStt(
   ws.on("error", (err) => {
     if (!closed) opts.onError(err);
   });
+  ws.on("close", () => {
+    if (finishRequested) notifyEnd();
+  });
 
   return {
     sendPcm(chunk) {
@@ -162,11 +175,18 @@ export function attachStreamingStt(
       if (!opened && !closed) pushPending(chunk);
     },
     finish() {
-      if (closed) return;
+      if (closed) {
+        notifyEnd();
+        return;
+      }
+      finishRequested = true;
       if (opened && ws.readyState === WebSocket.OPEN) {
         sendCloseStream();
-      } else {
-        finishRequested = true;
+      } else if (
+        ws.readyState === WebSocket.CLOSING
+        || ws.readyState === WebSocket.CLOSED
+      ) {
+        notifyEnd();
       }
     },
     close() {

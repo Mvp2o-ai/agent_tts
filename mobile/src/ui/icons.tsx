@@ -322,6 +322,54 @@ export function WaveIcon({
   );
 }
 
+export function RefreshIcon({
+  size = DEFAULT_SIZE,
+  color = DEFAULT_COLOR,
+}: IconProps): JSX.Element {
+  const stroke = strokeOf(size);
+  const ring = size * 0.7;
+  const head = size * 0.2;
+
+  return (
+    <View style={box(size)}>
+      <View
+        style={{
+          width: ring,
+          height: ring,
+          borderRadius: ring / 2,
+          borderWidth: stroke,
+          borderColor: color,
+          borderTopColor: "transparent",
+          transform: [{ rotate: "25deg" }],
+        }}
+      />
+      <View
+        style={{
+          position: "absolute",
+          top: size * 0.1,
+          right: size * 0.16,
+          width: head,
+          height: stroke,
+          borderRadius: stroke / 2,
+          backgroundColor: color,
+          transform: [{ rotate: "38deg" }],
+        }}
+      />
+      <View
+        style={{
+          position: "absolute",
+          top: size * 0.1,
+          right: size * 0.16,
+          width: stroke,
+          height: head,
+          borderRadius: stroke / 2,
+          backgroundColor: color,
+        }}
+      />
+    </View>
+  );
+}
+
 export function PowerIcon({
   size = DEFAULT_SIZE,
   color = DEFAULT_COLOR,

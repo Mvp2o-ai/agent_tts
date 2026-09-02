@@ -75,7 +75,9 @@ export function applySpeakingEvent(
       playing = false;
       break;
   }
-  return { ttsOpen, playing, speaking: ttsOpen || playing };
+  // Speaking is audible playback only. An open vendor TTS stream is not
+  // speech — the UI uses that as thinking/working until PCM actually plays.
+  return { ttsOpen, playing, speaking: playing };
 }
 
 /** Playback failed; keep the socket/mic unless the caller fail-closes. */

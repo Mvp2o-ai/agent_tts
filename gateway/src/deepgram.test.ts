@@ -26,10 +26,11 @@ class MockSttSocket extends EventEmitter implements SttTransport {
   }
 }
 
-function attach(ws: MockSttSocket) {
+function attach(ws: MockSttSocket, onEnd: () => void = () => undefined) {
   return attachStreamingStt(ws, {
     onEvent: () => undefined,
     onError: () => undefined,
+    onEnd,
   });
 }
 
@@ -95,5 +96,32 @@ describe("attachStreamingStt", () => {
     assert.equal(ws.sent.length, 2);
     assert.deepEqual(ws.sent[0], pcm);
     assert.equal(ws.sent[1], JSON.stringify({ type: "CloseStream" }));
+  });
+
+  it("signals end only after late transcript messages drain", () => {
+    const ws = new MockSttSocket();
+    const order: string[] = [];
+    const stt = attachStreamingStt(ws, {
+      onEvent: (event) => {
+        if (event.text) order.push(event.text);
+      },
+      onError: () => undefined,
+      onEnd: () => order.push("END"),
+    });
+    ws.openNow();
+    ws.emit("message", Buffer.from(JSON.stringify({
+      type: "Results",
+      is_final: true,
+      channel: { alternatives: [{ transcript: "one two" }] },
+    })));
+    stt.finish();
+    ws.emit("message", Buffer.from(JSON.stringify({
+      type: "Results",
+      is_final: true,
+      channel: { alternatives: [{ transcript: "three four" }] },
+    })));
+    ws.emit("close");
+
+    assert.deepEqual(order, ["one two", "three four", "END"]);
   });
 });

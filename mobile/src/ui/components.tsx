@@ -183,6 +183,76 @@ export function Toast({ message, ok }: { message: string; ok: boolean }) {
   );
 }
 
+export function ConfirmToast({
+  message,
+  confirmLabel,
+  onConfirm,
+  onCancel,
+}: {
+  message: string;
+  confirmLabel: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const enter = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    enter.setValue(0);
+    Animated.timing(enter, {
+      toValue: 1,
+      duration: 220,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [enter, message]);
+
+  return (
+    <Animated.View
+      accessibilityRole="alert"
+      accessibilityLiveRegion="polite"
+      style={[
+        styles.toast,
+        styles.toastWarn,
+        {
+          opacity: enter,
+          transform: [
+            {
+              translateY: enter.interpolate({
+                inputRange: [0, 1],
+                outputRange: [-12, 0],
+              }),
+            },
+          ],
+        },
+      ]}
+    >
+      <View style={styles.toastIcon}>
+        <AlertIcon size={14} color={color.warn} />
+      </View>
+      <View style={styles.toastBody}>
+        <Text style={styles.toastText}>{message}</Text>
+        <View style={styles.toastActions}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Cancel"
+            onPress={onCancel}
+            style={styles.toastAction}
+          >
+            <Text style={styles.toastActionLabel}>Cancel</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={confirmLabel}
+            onPress={onConfirm}
+            style={[styles.toastAction, styles.toastActionConfirm]}
+          >
+            <Text style={styles.toastActionConfirmLabel}>{confirmLabel}</Text>
+          </Pressable>
+        </View>
+      </View>
+    </Animated.View>
+  );
+}
+
 export function Segmented<T extends string>({
   options,
   value,
@@ -467,8 +537,16 @@ const styles = StyleSheet.create({
     backgroundColor: color.dangerTint,
     borderColor: color.dangerDeep,
   },
+  toastWarn: {
+    backgroundColor: color.warnDeep,
+    borderColor: color.warn,
+  },
   toastIcon: {
     marginTop: 2,
+  },
+  toastBody: {
+    flex: 1,
+    gap: space.sm,
   },
   toastText: {
     flex: 1,
@@ -476,6 +554,31 @@ const styles = StyleSheet.create({
     fontSize: font.label,
     lineHeight: 19,
     fontWeight: "500",
+  },
+  toastActions: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: space.sm,
+  },
+  toastAction: {
+    minHeight: 36,
+    paddingHorizontal: space.md,
+    borderRadius: radius.pill,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  toastActionLabel: {
+    color: color.textMuted,
+    fontSize: font.label,
+    fontWeight: "600",
+  },
+  toastActionConfirm: {
+    backgroundColor: color.accentDeep,
+  },
+  toastActionConfirmLabel: {
+    color: color.accent,
+    fontSize: font.label,
+    fontWeight: "700",
   },
   segmented: {
     flexDirection: "row",

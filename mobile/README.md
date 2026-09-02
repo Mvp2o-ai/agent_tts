@@ -62,8 +62,10 @@ that new deployment's host variables by its provider plugin.
 Connection fields (URL / token / user id) are device-only; the gateway never
 stores them for you.
 
-`localhost` on a phone is the phone itself, not your laptop. Use a LAN IP
-(`http://192.168.x.x:4100`) or an `https://` URL in front of the gateway.
+`localhost` on a phone is the phone itself, not your laptop. The iOS Simulator
+on the same Mac can use `http://127.0.0.1:4100`. A physical phone should use
+the Tailscale Serve URL from that Mac (`https://<machine>.<tailnet>.ts.net`),
+not a LAN IP.
 
 ## Provider plugins
 
@@ -132,7 +134,9 @@ iOS Simulator builds do not need a team id. Physical iOS devices and TestFlight 
 
 ## Protocol
 
-WebSocket `ws(s)://<gateway>/v1/voice?token&userId&mode=ptt|handsfree`.
+WebSocket `ws(s)://<gateway>/v1/voice?userId&mode=ptt|handsfree` with
+`Authorization: Bearer <GATEWAY_TOKEN>` on the upgrade request. The token is
+never a query parameter.
 
 - Up: PCM 16 kHz, 16-bit little-endian, mono
 - Down: JSON text events (`ready`, `transcript`, `agent_text`, `tool_event`,

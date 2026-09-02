@@ -9,9 +9,11 @@
 
 import { createGateway } from "./http.js";
 import { SqliteConfigStore, MemoryConfigStore } from "./config-store.js";
+import { gatewayBindHost } from "./gateway-bind.js";
 import { requireGatewayToken } from "./gateway-token.js";
 
 const PORT = Number(process.env.PORT ?? 4100);
+const bindHost = gatewayBindHost(process.env.GATEWAY_BIND);
 const token = requireGatewayToken(process.env.GATEWAY_TOKEN);
 
 const dbPath = process.env.CONFIG_DB ?? "./data/agent_tts.db";
@@ -42,10 +44,8 @@ const { server } = createGateway({
   },
 });
 
-// Bind all interfaces. Container hosts (Railway, Compose, k8s) inject PORT
-// and reject the process if it only listens on localhost.
-server.listen(PORT, "0.0.0.0", () => {
-  process.stderr.write(`agent_tts gateway listening on 0.0.0.0:${PORT}\n`);
+server.listen(PORT, bindHost, () => {
+  process.stderr.write(`agent_tts gateway listening on ${bindHost}:${PORT}\n`);
 });
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
