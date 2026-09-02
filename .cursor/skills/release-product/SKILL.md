@@ -1,0 +1,67 @@
+---
+name: release-product
+description: Releases the public agent_tts product and produces its installable artifacts. Use when the user says deploy, ship, release, publish, build for phone, make a binary, make a bundle, or wants phone use without Metro.
+---
+
+# Release the public product
+
+In this repository, an unqualified “deploy”, “ship”, or “release” means publish
+the open-source product artifacts. It does **not** mean deploy an operator’s
+container to Railway or any other provider.
+
+## Hard boundary
+
+- While performing this public release flow, never open or run anything in
+  `agent_tts-ops`.
+- Never target Railway, a live provider project, or an operator host.
+- A provider deployment is a downstream user action, not this repository’s
+  CI/CD.
+- Only touch an operator instance if the user explicitly names that instance
+  or provider and asks to deploy it.
+
+## Artifacts
+
+- Runtime changes publish the BYOC container image to GHCR from `main`.
+- “Phone use without Metro”, “standalone”, “binary”, “bundle”, or “install
+  link” means an EAS `preview` internal-distribution build.
+- A development client is not standalone; it still needs Metro.
+- This project has no OTA update path. Any mobile JavaScript or native change
+  needs a new preview build to reach a standalone phone.
+
+## Release flow
+
+1. Inspect and review only the requested product changes.
+2. Run checks proportional to those changes.
+3. Commit and push a focused branch.
+4. Open or update its PR.
+5. Merge when its applicable checks pass.
+6. For runtime/image changes, verify the `Publish runtime image` job on the
+   resulting `main` run. Do not substitute a provider deployment.
+7. For mobile changes, or whenever the user asks for a standalone phone
+   artifact, follow the `mobile-eas-device` skill and return the EAS build-page
+   URL.
+
+Do not process Dependabot PRs, dependency upgrades, or unrelated maintenance as
+part of a release. They are separate work and must never serialize or delay the
+requested product artifact.
+
+Do not change or bypass repository protection as an incidental release step.
+If the requested PR is genuinely blocked, report the exact failed required
+check. The user decides whether protection policy itself should change.
+
+## Waiting and completion
+
+- Do not wait on unrelated PRs or checks.
+- Submit EAS with `--no-wait`; the build page is the handoff and shows queue,
+  build, and install status.
+- Report runtime publication and EAS submission separately.
+- A release is not blocked merely because unrelated Dependabot checks failed.
+
+## Handoff
+
+State only what applies:
+
+- merged PR and `main` commit;
+- GHCR publish status (and immutable digest when available);
+- standalone EAS preview link and current status;
+- exact blocker, if one exists.
