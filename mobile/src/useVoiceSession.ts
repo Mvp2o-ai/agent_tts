@@ -5,6 +5,7 @@ import {
   classifyIncomingFrame,
   connectionError,
   nextReconnectDelay,
+  openVoiceSocket,
   probeGatewayHealth,
   validateReadyAudioFormat,
   voiceUrl,
@@ -603,11 +604,12 @@ export function useVoiceSession(
 
         let ws: WebSocket;
         try {
-          ws = new WebSocket(
+          ws = openVoiceSocket(
             voiceUrl(current, mode, {
               focused: focusedRef.current,
               afterEventId: lastEventIdRef.current,
             }),
+            current.token,
           );
         } catch (cause) {
           failClosed(

@@ -132,7 +132,9 @@ iOS Simulator builds do not need a team id. Physical iOS devices and TestFlight 
 
 ## Protocol
 
-WebSocket `ws(s)://<gateway>/v1/voice?token&userId&mode=ptt|handsfree`.
+WebSocket `ws(s)://<gateway>/v1/voice?userId&mode=ptt|handsfree` with
+`Authorization: Bearer <GATEWAY_TOKEN>` on the upgrade request. The token is
+never a query parameter.
 
 - Up: PCM 16 kHz, 16-bit little-endian, mono
 - Down: JSON text events (`ready`, `transcript`, `agent_text`, `tool_event`,

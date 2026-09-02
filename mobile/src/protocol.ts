@@ -100,6 +100,28 @@ export async function probeGatewayHealth(
   }
 }
 
+export function gatewayAuthHeaders(token: string): Record<string, string> {
+  return { Authorization: `Bearer ${token}` };
+}
+
+/**
+ * RN's native WebSocket (iOS Simulator and device; not the browser API)
+ * sends `options.headers` on the HTTP upgrade. Do not put the bearer token
+ * in the URL — the gateway rejects query-string auth.
+ */
+export function openVoiceSocket(url: string, token: string): WebSocket {
+  const NativeWebSocket = WebSocket as unknown as {
+    new (
+      url: string,
+      protocols: string | string[] | null,
+      options: { headers: Record<string, string> },
+    ): WebSocket;
+  };
+  return new NativeWebSocket(url, null, {
+    headers: gatewayAuthHeaders(token),
+  });
+}
+
 export function voiceUrl(
   conn: Connection,
   mode: VoiceMode,
@@ -108,7 +130,6 @@ export function voiceUrl(
   const ws = httpToWs(conn.gatewayUrl);
   if (!ws) throw new Error("invalid gateway URL");
   const q = new URLSearchParams({
-    token: conn.token,
     userId: conn.userId,
     mode,
     focused: String(options.focused ?? true),
