@@ -18,6 +18,8 @@ export interface SttStream {
 
 export interface TtsStream {
   pushText(text: string): void;
+  /** Force-generate buffered text without closing the socket (not EOS). */
+  flush(): void;
   finish(): void;
   close(): void;
 }
@@ -42,6 +44,8 @@ export interface SttAdapter {
   open(opts: {
     onEvent: (ev: TranscriptEvent) => void;
     onError: (err: Error) => void;
+    /** Fires after all transcript events have drained from a finished stream. */
+    onEnd: () => void;
   }): SttStream;
 }
 

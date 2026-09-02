@@ -8,19 +8,11 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
+import type { TalkState } from "../talk-state";
 import { MicIcon, MicOffIcon, WaveIcon } from "./icons";
 import { color, font, shadow, space } from "./theme";
 
-export type TalkState =
-  | "needs-setup"
-  | "stopped"
-  | "starting"
-  | "unreachable"
-  | "gone"
-  | "idle"
-  | "capturing"
-  | "working"
-  | "speaking";
+export type { TalkState };
 
 export function TalkButton({
   mode,
@@ -38,11 +30,16 @@ export function TalkButton({
   const { width } = useWindowDimensions();
   const diameter = Math.max(150, Math.min(232, width - 120));
   const active = state === "capturing";
+  const thinking = state === "thinking";
+  const working = state === "working";
+  const speaking = state === "speaking";
   const live =
     state === "idle" ||
-    state === "capturing" ||
-    state === "working" ||
-    state === "speaking";
+    active ||
+    thinking ||
+    working ||
+    speaking;
+  const bright = thinking || speaking;
 
   const press = useRef(new Animated.Value(0)).current;
   useEffect(() => {
@@ -54,26 +51,36 @@ export function TalkButton({
     }).start();
   }, [active, press]);
 
-  const ringA = useRipple(active || state === "speaking", 0);
-  const ringB = useRipple(active || state === "speaking", 900);
+  const ringA = useRipple(active || thinking || working || speaking, 0);
+  const ringB = useRipple(active || thinking || working || speaking, 900);
 
-  const ringColor = state === "speaking" ? color.agent : color.accent;
+  const ringColor = bright ? color.agent : working ? color.live : color.accent;
   const fill =
     !live
       ? color.surface
       : active
         ? color.accentDeep
-        : color.surfaceRaised;
+        : thinking
+          ? color.accentDeep
+          : color.surfaceRaised;
   const border =
     !live
       ? color.border
       : active
         ? color.accent
-        : state === "speaking"
+        : bright
           ? color.agent
-          : color.borderStrong;
+          : working
+            ? color.live
+            : color.borderStrong;
 
-  const glyphColor = !live ? color.textDim : color.text;
+  const glyphColor = !live
+    ? color.textDim
+    : bright
+      ? color.agent
+      : working
+        ? color.live
+        : color.text;
   const glyphSize = diameter * 0.3;
 
   const content = (
@@ -118,7 +125,7 @@ export function TalkButton({
       >
         {!live ? (
           <MicOffIcon size={glyphSize} color={glyphColor} />
-        ) : state === "speaking" ? (
+        ) : speaking ? (
           <WaveIcon size={glyphSize} color={color.agent} />
         ) : (
           <MicIcon size={glyphSize} color={glyphColor} />
@@ -172,7 +179,7 @@ function captionFor(
   if (state === "stopped") {
     return {
       title: "Session ended",
-      subtitle: "Start a new session.",
+      subtitle: "This container is stopped.",
     };
   }
   if (state === "starting") {
@@ -202,6 +209,13 @@ function captionFor(
   }
   if (state === "capturing") {
     return { title: "Listening", subtitle: "Release to send." };
+  }
+  if (state === "thinking") {
+    return {
+      title: "Agent thinking",
+      subtitle:
+        mode === "ptt" ? "Hold to add another instruction." : "Speak any time.",
+    };
   }
   if (state === "working") {
     return {

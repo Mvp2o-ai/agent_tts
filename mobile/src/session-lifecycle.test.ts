@@ -59,15 +59,17 @@ describe("session generation", () => {
     );
   });
 
-  it("keeps speaking true from tts_start until tts_end and playback idle", () => {
+  it("does not treat an open TTS stream as speaking until playback is busy", () => {
     let state = applySpeakingEvent(
       { ttsOpen: false, playing: false },
       "tts_start",
     );
-    assert.equal(state.speaking, true);
+    assert.equal(state.ttsOpen, true);
+    assert.equal(state.speaking, false);
     state = applySpeakingEvent(state, "playback_busy");
     assert.equal(state.speaking, true);
     state = applySpeakingEvent(state, "tts_end");
+    assert.equal(state.ttsOpen, false);
     assert.equal(state.speaking, true);
     state = applySpeakingEvent(state, "playback_idle");
     assert.equal(state.speaking, false);

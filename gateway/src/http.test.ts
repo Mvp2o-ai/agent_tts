@@ -83,9 +83,7 @@ describe("gateway http", () => {
 
       const frames: Record<string, unknown>[] = [];
       const ready = await new Promise<Record<string, unknown>>((resolve, reject) => {
-        const ws = openAuthenticatedSocket(
-          `ws://127.0.0.1:${port}/v1/voice?token=test-token&userId=default&mode=ptt`,
-        );
+        const ws = openAuthenticatedSocket(voiceSocketUrl(port));
         const timer = setTimeout(() => reject(new Error("ready timeout")), 5000);
         ws.on("message", (data) => {
           const msg = JSON.parse(String(data)) as Record<string, unknown>;
@@ -116,6 +114,48 @@ describe("gateway http", () => {
         },
       );
       assert.deepEqual(await killed.json(), { ok: true, killed: 1 });
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((err) => (err ? reject(err) : resolve())),
+      );
+      await store.close();
+    }
+  });
+
+  it("rejects query-string tokens on HTTP and the voice socket", async () => {
+    const store = new MemoryConfigStore();
+    const { server } = createGateway({
+      token: "test-token",
+      store,
+      deepgramKey: "test-stt-key",
+      boxCommand: ["node", "--import", "tsx", fakeBox],
+    });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const { port } = server.address() as AddressInfo;
+    try {
+      const httpQuery = await fetch(
+        `http://127.0.0.1:${port}/v1/config?userId=default&token=test-token`,
+      );
+      assert.equal(httpQuery.status, 401);
+
+      const headerWins = await fetch(
+        `http://127.0.0.1:${port}/v1/config?userId=default&token=wrong`,
+        { headers: { authorization: "Bearer test-token" } },
+      );
+      assert.equal(headerWins.status, 200);
+
+      const closeCode = await new Promise<number>((resolve, reject) => {
+        const ws = new WebSocket(
+          `ws://127.0.0.1:${port}/v1/voice?token=test-token&userId=default&mode=ptt`,
+        );
+        const timer = setTimeout(() => reject(new Error("close timeout")), 5000);
+        ws.on("close", (code) => {
+          clearTimeout(timer);
+          resolve(code);
+        });
+        ws.on("error", reject);
+      });
+      assert.equal(closeCode, 4401);
     } finally {
       await new Promise<void>((resolve, reject) =>
         server.close((err) => (err ? reject(err) : resolve())),
@@ -170,9 +210,7 @@ describe("gateway http", () => {
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     const { port } = server.address() as AddressInfo;
-    const first = openAuthenticatedSocket(
-      `ws://127.0.0.1:${port}/v1/voice?token=test-token&userId=default&mode=ptt`,
-    );
+    const first = openAuthenticatedSocket(voiceSocketUrl(port));
 
     try {
       const firstReady = await waitForJson(first, (msg) => msg.type === "ready");
@@ -195,7 +233,10 @@ describe("gateway http", () => {
       assert.equal(sessions.get("default"), session);
 
       const second = openAuthenticatedSocket(
-        `ws://127.0.0.1:${port}/v1/voice?token=test-token&userId=default&mode=ptt&focused=false&afterEventId=${cursor}`,
+        voiceSocketUrl(port, {
+          focused: false,
+          afterEventId: cursor,
+        }),
       );
       const replayed = await collectJsonUntil(
         second,
@@ -245,9 +286,7 @@ describe("gateway http", () => {
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     const { port } = server.address() as AddressInfo;
-    const url =
-      `ws://127.0.0.1:${port}/v1/voice` +
-      "?token=test-token&userId=default&mode=ptt";
+    const url = voiceSocketUrl(port);
     const first = openAuthenticatedSocket(url);
 
     try {
@@ -289,9 +328,7 @@ describe("gateway http", () => {
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     const { port } = server.address() as AddressInfo;
-    const ws = openAuthenticatedSocket(
-      `ws://127.0.0.1:${port}/v1/voice?token=test-token&userId=default&mode=ptt`,
-    );
+    const ws = openAuthenticatedSocket(voiceSocketUrl(port));
     const messages: Record<string, unknown>[] = [];
     try {
       const closeCode = await new Promise<number>((resolve, reject) => {
@@ -449,8 +486,30 @@ describe("gateway http", () => {
   });
 });
 
-function openAuthenticatedSocket(url: string, credential = ""): WebSocket {
-  const ws = new WebSocket(url);
+function voiceSocketUrl(
+  port: number,
+  extra: { focused?: boolean; afterEventId?: number } = {},
+): string {
+  const url = new URL(`ws://127.0.0.1:${port}/v1/voice`);
+  url.searchParams.set("userId", "default");
+  url.searchParams.set("mode", "ptt");
+  if (extra.focused !== undefined) {
+    url.searchParams.set("focused", String(extra.focused));
+  }
+  if (extra.afterEventId !== undefined) {
+    url.searchParams.set("afterEventId", String(extra.afterEventId));
+  }
+  return url.toString();
+}
+
+function openAuthenticatedSocket(
+  url: string,
+  credential = "",
+  token = "test-token",
+): WebSocket {
+  const ws = new WebSocket(url, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
   ws.on("open", () => {
     ws.send(JSON.stringify({ type: "git_auth", credential }));
   });

@@ -5,6 +5,7 @@ import {
   classifyIncomingFrame,
   connectionError,
   nextReconnectDelay,
+  openVoiceSocket,
   probeGatewayHealth,
   validateReadyAudioFormat,
   voiceUrl,
@@ -20,6 +21,7 @@ import {
   type SessionStatus,
   type SpeakingState,
 } from "./session-lifecycle";
+import { talkBusyKindAfter, type TalkBusyKind } from "./talk-state";
 import { runSessionPreflight } from "./session-preflight";
 import { resolveDesiredGitCredential } from "./session-git-auth";
 import {
@@ -109,7 +111,9 @@ export function useVoiceSession(
   availability: GatewayAvailability;
   events: SessionEvent[];
   speaking: boolean;
+  ttsOpen: boolean;
   working: boolean;
+  busyKind: TalkBusyKind;
   harness: string;
   generationId: string;
   provisioning: ProvisioningState | null;
@@ -129,7 +133,9 @@ export function useVoiceSession(
     useState<GatewayAvailability>("unknown");
   const [events, setEvents] = useState<SessionEvent[]>([]);
   const [speaking, setSpeaking] = useState(false);
+  const [ttsOpen, setTtsOpen] = useState(false);
   const [working, setWorking] = useState(false);
+  const [busyKind, setBusyKind] = useState<TalkBusyKind>("thinking");
   const [harness, setHarness] = useState("");
   const [generationId, setGenerationId] = useState("");
   const [lastError, setLastError] = useState("");
@@ -219,7 +225,10 @@ export function useVoiceSession(
     (event: Parameters<typeof applySpeakingEvent>[1]) => {
       const next = applySpeakingEvent(speakingRef.current, event);
       speakingRef.current = { ttsOpen: next.ttsOpen, playing: next.playing };
-      if (mountedRef.current) setSpeaking(next.speaking);
+      if (mountedRef.current) {
+        setSpeaking(next.speaking);
+        setTtsOpen(next.ttsOpen);
+      }
     },
     [],
   );
@@ -330,6 +339,8 @@ export function useVoiceSession(
       setLastError(message);
       setAvailability(nextAvailability);
       setProvisioning(null);
+      setWorking(false);
+      setBusyKind("thinking");
       setStatusSafe("disconnected");
     },
     [clearTimers, closeSocket, flushPlayback, setStatusSafe, stopMic],
@@ -406,11 +417,18 @@ export function useVoiceSession(
               setLastEventId(0);
               setEvents([]);
               setWorking(false);
+              setBusyKind("thinking");
+              applySpeaking("flush");
             }
           }
           if (msg.harness) setHarness(msg.harness);
           setWorking(
             msg.sessionState === "working" || msg.sessionState === "speaking",
+          );
+          setBusyKind(
+            msg.sessionState === "working"
+              ? talkBusyKindAfter("tool_event")
+              : talkBusyKindAfter("reset"),
           );
           reconnectAttemptRef.current = 0;
           setProvisioning(null);
@@ -432,9 +450,13 @@ export function useVoiceSession(
           handleTranscript(msg.text ?? "", Boolean(msg.isFinal));
           break;
         case "agent_text":
-          if (msg.text) pushEvent("agent", msg.text);
+          if (msg.text) {
+            setBusyKind(talkBusyKindAfter("agent_text"));
+            pushEvent("agent", msg.text);
+          }
           break;
         case "tool_event":
+          setBusyKind(talkBusyKindAfter("tool_event"));
           pushEvent("tool", msg.summary ?? "");
           break;
         case "queued":
@@ -445,6 +467,7 @@ export function useVoiceSession(
           break;
         case "prompt_start":
           setWorking(true);
+          setBusyKind(talkBusyKindAfter("prompt_start"));
           pushEvent("prompt", msg.text ?? msg.promptId ?? "");
           break;
         case "tts_start":
@@ -463,11 +486,13 @@ export function useVoiceSession(
         case "stopped":
           playbackAllowedRef.current = false;
           setWorking(false);
+          setBusyKind(talkBusyKindAfter("reset"));
           pushEvent("stopped", msg.reason ?? "stopped");
           void flushPlayback();
           break;
         case "done":
           setWorking(false);
+          setBusyKind(talkBusyKindAfter("reset"));
           pushEvent("done", msg.promptId ?? "done");
           break;
         case "error": {
@@ -579,11 +604,12 @@ export function useVoiceSession(
 
         let ws: WebSocket;
         try {
-          ws = new WebSocket(
+          ws = openVoiceSocket(
             voiceUrl(current, mode, {
               focused: focusedRef.current,
               afterEventId: lastEventIdRef.current,
             }),
+            current.token,
           );
         } catch (cause) {
           failClosed(
@@ -727,6 +753,8 @@ export function useVoiceSession(
     void flushPlayback();
     void releaseOwnedVoice();
     setProvisioning(null);
+    setWorking(false);
+    setBusyKind("thinking");
     setGitAuthState("unknown");
     setGitAuthMessage("");
     setStatusSafe("disconnected");
@@ -1026,7 +1054,9 @@ export function useVoiceSession(
     availability,
     events,
     speaking,
+    ttsOpen,
     working,
+    busyKind,
     harness,
     generationId,
     provisioning,

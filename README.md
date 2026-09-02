@@ -75,7 +75,10 @@ npm ci && npm test
 docker compose up -d --build    # one agent container + SQLite volume
 ```
 
-The gateway listens on `:4100`. For phone access, expose it on your LAN or put TLS in front (Caddy/nginx) and use `https://`. Deploy additional copies of the same image (each with its own URL, token, and SQLite volume) to run more than one agent.
+The gateway is published on `127.0.0.1:4100` (not the LAN). An iOS Simulator
+on this Mac uses `http://127.0.0.1:4100`. A physical phone uses Tailscale Serve
+on the Mac, not a LAN IP. Deploy additional copies of the same image (each
+with its own URL, token, and SQLite volume) to run more than one agent.
 
 ### Who sets `GATEWAY_TOKEN`
 

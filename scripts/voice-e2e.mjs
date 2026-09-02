@@ -48,10 +48,11 @@ function synth(text) {
 
 function connect(mode) {
   const url = new URL("/v1/voice", GATEWAY.replace(/^http/, "ws"));
-  url.searchParams.set("token", TOKEN);
   url.searchParams.set("userId", "default");
   url.searchParams.set("mode", mode);
-  const ws = new WebSocket(url);
+  const ws = new WebSocket(url, {
+    headers: { Authorization: `Bearer ${TOKEN}` },
+  });
   ws.binaryType = "arraybuffer";
   return ws;
 }

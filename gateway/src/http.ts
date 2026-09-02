@@ -155,7 +155,7 @@ async function handleHttp(
   }
 
   if (req.method === "GET" && url.pathname === "/v1/capabilities") {
-    if (!authorize(req, opts.token, url)) {
+    if (!authorize(req, opts.token)) {
       json(res, 401, { error: "unauthorized" });
       return;
     }
@@ -179,7 +179,7 @@ async function handleHttp(
   }
 
   if (req.method === "GET" && url.pathname === "/v1/harnesses") {
-    if (!authorize(req, opts.token, url)) {
+    if (!authorize(req, opts.token)) {
       json(res, 401, { error: "unauthorized" });
       return;
     }
@@ -188,7 +188,7 @@ async function handleHttp(
   }
 
   if (req.method === "GET" && url.pathname === "/v1/model-catalog") {
-    if (!authorize(req, opts.token, url)) {
+    if (!authorize(req, opts.token)) {
       json(res, 401, { error: "unauthorized" });
       return;
     }
@@ -205,7 +205,7 @@ async function handleHttp(
   }
 
   if (url.pathname === "/v1/config") {
-    if (!authorize(req, opts.token, url)) {
+    if (!authorize(req, opts.token)) {
       json(res, 401, { error: "unauthorized" });
       return;
     }
@@ -222,7 +222,7 @@ async function handleHttp(
   }
 
   if (req.method === "POST" && url.pathname === "/v1/session/kill") {
-    if (!authorize(req, opts.token, url)) {
+    if (!authorize(req, opts.token)) {
       json(res, 401, { error: "unauthorized" });
       return;
     }
@@ -235,7 +235,7 @@ async function handleHttp(
   // New session = new container. Close everything, then let onReset exit the
   // process; the operator's platform recreates the container from the image.
   if (req.method === "POST" && url.pathname === "/v1/session/reset") {
-    if (!authorize(req, opts.token, url)) {
+    if (!authorize(req, opts.token)) {
       json(res, 401, { error: "unauthorized" });
       return;
     }
@@ -249,7 +249,7 @@ async function handleHttp(
   }
 
   if (req.method === "POST" && url.pathname === "/v1/debug/prompt") {
-    if (!authorize(req, opts.token, url)) {
+    if (!authorize(req, opts.token)) {
       json(res, 401, { error: "unauthorized" });
       return;
     }
@@ -326,7 +326,7 @@ async function handleVoice(
 ): Promise<void> {
   const { opts } = runtime;
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
-  if (!authorize(req, opts.token, url)) {
+  if (!authorize(req, opts.token)) {
     ws.close(4401, "unauthorized");
     return;
   }
@@ -476,6 +476,7 @@ async function handleVoice(
       onError: (err) =>
         session.sink.sendJson({ type: "error", message: err.message }),
       onEvent: (ev) => input.onStt(ev),
+      onEnd: () => input.sttEnd(),
     });
   };
 
@@ -670,11 +671,10 @@ function openBox(opts: GatewayOptions, config: UserConfig): BoxConnection {
   );
 }
 
-function authorize(req: IncomingMessage, token: string, url: URL): boolean {
+function authorize(req: IncomingMessage, token: string): boolean {
   const header = req.headers.authorization;
-  const bearer = header?.startsWith("Bearer ") ? header.slice(7) : "";
-  const query = url.searchParams.get("token") ?? "";
-  return Boolean(token) && (bearer === token || query === token);
+  if (!token || !header?.startsWith("Bearer ")) return false;
+  return header.slice("Bearer ".length) === token;
 }
 
 function bufferText(raw: unknown): string {

@@ -1,7 +1,10 @@
 /**
  * Flush agent tokens into speakable phrases so ElevenLabs hears clauses,
- * not one-character ticks.
+ * not one-character ticks. Incomplete numeric tails stay buffered so an
+ * 80-character flush cannot split a phone or amount.
  */
+import { incompleteNumericHoldStart } from "./speech-numbers.js";
+
 export class SpeechBuffer {
   private buf = "";
 
@@ -33,8 +36,10 @@ export class SpeechBuffer {
       this.buf = "";
       if (rest) out.push(rest);
     } else if (this.buf.length >= 80) {
-      const phrase = this.buf.trim();
-      this.buf = "";
+      const holdStart = incompleteNumericHoldStart(this.buf);
+      const cut = holdStart === null ? this.buf.length : holdStart;
+      const phrase = this.buf.slice(0, cut).trim();
+      this.buf = this.buf.slice(cut);
       if (phrase) out.push(phrase);
     }
     return out;
