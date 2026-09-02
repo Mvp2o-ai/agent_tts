@@ -239,6 +239,29 @@ describe("AgentTurn", () => {
     await turn.close();
   });
 
+  it("verbalizes numbers for TTS only and keeps digits on agent_text", async () => {
+    const tts = recordingTts();
+    const { box, events, turn } = setup(tts.factory);
+    turn.enqueue("invoice");
+    const id = box.prompts()[0].id;
+    box.emit({
+      type: "chunk",
+      promptId: id,
+      text: "Call 555-123-4567. The total is $1,247.50. ",
+    });
+    assert.deepEqual(
+      events.filter((e) => e.type === "agent_text").map((e) =>
+        e.type === "agent_text" ? e.text : "",
+      ),
+      ["Call 555-123-4567. The total is $1,247.50. "],
+    );
+    assert.deepEqual(tts.texts, [
+      "Call five five five, one two three, four five six seven.",
+      "The total is one thousand two hundred forty-seven dollars and fifty cents.",
+    ]);
+    await turn.close();
+  });
+
   it("stops TTS while unfocused and resumes it for later text", async () => {
     const streams: Array<{ closed: boolean; texts: string[] }> = [];
     const factory: OpenTts = (opts) => {

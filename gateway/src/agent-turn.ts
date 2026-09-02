@@ -3,6 +3,7 @@ import { isTerminal, type BoxInbound, type BoxOutbound } from "./box-protocol.js
 import type { UserConfig } from "./config-schema.js";
 import { PromptQueue } from "./prompt-queue.js";
 import { SpeechBuffer } from "./speech-buffer.js";
+import { verbalizeNumbersForTts } from "./speech-numbers.js";
 import type { TtsAdapter, TtsStream } from "./voice-providers.js";
 
 export type ClientEvent =
@@ -424,7 +425,7 @@ export class AgentTurn {
         },
       });
     }
-    for (const p of phrases) this.tts.pushText(p);
+    for (const p of phrases) this.tts.pushText(verbalizeNumbersForTts(p));
   }
 
   private stopTts(): void {

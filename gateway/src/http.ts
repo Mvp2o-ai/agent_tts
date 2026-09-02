@@ -476,6 +476,7 @@ async function handleVoice(
       onError: (err) =>
         session.sink.sendJson({ type: "error", message: err.message }),
       onEvent: (ev) => input.onStt(ev),
+      onEnd: () => input.sttEnd(),
     });
   };
 

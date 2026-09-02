@@ -13,8 +13,12 @@ export type TurnHandle = Pick<AgentTurn, "enqueue" | "abort" | "bargeIn" | "spea
  * never enqueued. `stopped` is emitted by AgentTurn, not here.
  */
 export class VoiceInput {
-  private utterance = "";
+  /** Stable Deepgram segments for the current conversational utterance. */
+  private finalParts: string[] = [];
+  /** Display/recovery fallback when a stream ends before any segment finalizes. */
+  private lastInterim = "";
   private pttOpen = false;
+  private pttAwaitingSttEnd = false;
   private pttCommitted = false;
   private readonly stop = new StopLatch();
 
@@ -49,27 +53,39 @@ export class VoiceInput {
       this.stop.endUtterance();
     }
 
-    if (ev.isFinal && ev.text) {
-      this.utterance = ev.text;
-      if (this.mode === "handsfree" || (!this.pttOpen && !this.pttCommitted)) {
-        this.commit();
+    if (ev.text) {
+      if (ev.isFinal) {
+        // `isFinal` stabilizes one segment, not the whole utterance. Deepgram
+        // may emit several final segments during one PTT press or spoken turn.
+        this.finalParts.push(ev.text.trim());
+        this.lastInterim = "";
+      } else {
+        this.lastInterim = ev.text.trim();
       }
     }
 
-    if (ev.utteranceEnd && this.mode === "handsfree" && this.utterance) {
+    if (ev.utteranceEnd && this.mode === "handsfree" && this.hasUtterance()) {
       this.commit();
     }
   }
 
   pttStart(): void {
     this.pttOpen = true;
+    this.pttAwaitingSttEnd = false;
     this.pttCommitted = false;
-    this.utterance = "";
+    this.clearUtterance();
   }
 
   pttEnd(): void {
     this.pttOpen = false;
-    if (this.utterance && !this.pttCommitted) this.commit();
+    this.pttAwaitingSttEnd = true;
+  }
+
+  /** Called after the STT stream flushes all late final segments and closes. */
+  sttEnd(): void {
+    if (!this.pttAwaitingSttEnd || this.pttCommitted) return;
+    this.pttAwaitingSttEnd = false;
+    if (this.hasUtterance()) this.commit();
   }
 
   userAbort(): void {
@@ -78,15 +94,28 @@ export class VoiceInput {
   }
 
   private discardUtterance(): void {
-    this.utterance = "";
+    this.clearUtterance();
+    this.pttAwaitingSttEnd = false;
     this.pttCommitted = true;
   }
 
   private commit(): void {
-    const text = this.utterance.trim();
-    this.utterance = "";
+    const text = (
+      this.finalParts.join(" ").trim() || this.lastInterim
+    ).trim();
+    this.clearUtterance();
+    this.pttAwaitingSttEnd = false;
     this.pttCommitted = true;
     if (!text) return;
     this.turn.enqueue(text);
+  }
+
+  private hasUtterance(): boolean {
+    return this.finalParts.length > 0 || this.lastInterim.length > 0;
+  }
+
+  private clearUtterance(): void {
+    this.finalParts = [];
+    this.lastInterim = "";
   }
 }

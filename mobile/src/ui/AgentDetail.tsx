@@ -7,8 +7,15 @@ import {
 } from "react-native";
 import type { ReactNode } from "react";
 import { useState } from "react";
-import { Button, Card, Field, KeyboardAwareScrollView } from "./components";
-import { PencilIcon, PowerIcon, StopIcon, TrashIcon } from "./icons";
+import { NEW_SESSION_WARNING } from "../session-refresh";
+import {
+  Button,
+  Card,
+  ConfirmToast,
+  Field,
+  KeyboardAwareScrollView,
+} from "./components";
+import { PencilIcon, PowerIcon, RefreshIcon, TrashIcon } from "./icons";
 import { color, font, inset, radius, space } from "./theme";
 
 export function AgentDetailScreen({
@@ -18,7 +25,6 @@ export function AgentDetailScreen({
   hostLabel,
   statusLabel,
   statusTone,
-  running,
   gone,
   lifecycleBusy,
   removing,
@@ -26,7 +32,7 @@ export function AgentDetailScreen({
   onNameChange,
   onGatewayUrlChange,
   onTokenChange,
-  onLifecycle,
+  onNewSession,
   onReplace,
   onRemove,
   onBack,
@@ -37,7 +43,6 @@ export function AgentDetailScreen({
   hostLabel: string;
   statusLabel: string;
   statusTone: "idle" | "busy" | "live" | "error";
-  running: boolean;
   gone?: boolean;
   lifecycleBusy?: boolean;
   removing?: boolean;
@@ -45,12 +50,13 @@ export function AgentDetailScreen({
   onNameChange: (value: string) => void;
   onGatewayUrlChange: (value: string) => void;
   onTokenChange: (value: string) => void;
-  onLifecycle: () => void;
+  onNewSession: () => void;
   onReplace: () => void;
   onRemove: () => void;
   onBack: () => void;
 }) {
   const [editingName, setEditingName] = useState(false);
+  const [confirmingSession, setConfirmingSession] = useState(false);
 
   return (
     <View style={styles.root}>
@@ -149,18 +155,30 @@ export function AgentDetailScreen({
             hostLabel={hostLabel}
             gatewayUrl={gatewayUrl}
             token={token}
-            running={running}
             lifecycleBusy={lifecycleBusy}
             removing={removing}
             configuration={configuration}
             name={name}
             onGatewayUrlChange={onGatewayUrlChange}
             onTokenChange={onTokenChange}
-            onLifecycle={onLifecycle}
+            onNewSession={() => setConfirmingSession(true)}
             onRemove={onRemove}
           />
         )}
       </KeyboardAwareScrollView>
+      {confirmingSession ? (
+        <View style={styles.confirmOverlay}>
+          <ConfirmToast
+            message={NEW_SESSION_WARNING}
+            confirmLabel="New session"
+            onCancel={() => setConfirmingSession(false)}
+            onConfirm={() => {
+              setConfirmingSession(false);
+              onNewSession();
+            }}
+          />
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -171,14 +189,13 @@ function AgentDetailBody({
   hostLabel,
   gatewayUrl,
   token,
-  running,
   lifecycleBusy,
   removing,
   configuration,
   name,
   onGatewayUrlChange,
   onTokenChange,
-  onLifecycle,
+  onNewSession,
   onRemove,
 }: {
   statusLabel: string;
@@ -186,14 +203,13 @@ function AgentDetailBody({
   hostLabel: string;
   gatewayUrl: string;
   token: string;
-  running: boolean;
   lifecycleBusy?: boolean;
   removing?: boolean;
   configuration?: ReactNode;
   name: string;
   onGatewayUrlChange: (value: string) => void;
   onTokenChange: (value: string) => void;
-  onLifecycle: () => void;
+  onNewSession: () => void;
   onRemove: () => void;
 }) {
   return (
@@ -243,24 +259,24 @@ function AgentDetailBody({
 
         <Text style={styles.sectionLabel}>SESSION</Text>
         <Card style={styles.lifecycleCard}>
-          <Text style={styles.lifecycleTitle}>Disposable session</Text>
+          <Text style={styles.lifecycleTitle}>Current container</Text>
           <Text style={styles.lifecycleDetail}>
-            Each session is disposable. Commit and push your work or open a PR
-            before ending; uncommitted or unpushed work is lost.
+            A new session recreates this container. Commit and push your work
+            first; uncommitted or unpushed work is lost.
           </Text>
-          <Button
-            label={running ? "End session" : "Start new session"}
-            tone={running ? "danger" : "primary"}
-            busy={lifecycleBusy}
-            icon={
-              running ? (
-                <StopIcon size={17} color={color.danger} />
-              ) : (
-                <PowerIcon size={18} color={color.bg} />
-              )
-            }
-            onPress={onLifecycle}
-          />
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="New session"
+            accessibilityHint="Recreates this agent's container."
+            disabled={lifecycleBusy}
+            onPress={onNewSession}
+            style={[styles.newSession, lifecycleBusy && styles.newSessionBusy]}
+          >
+            <RefreshIcon size={18} color={color.accent} />
+            <Text style={styles.newSessionLabel}>
+              {lifecycleBusy ? "Starting new session…" : "New session"}
+            </Text>
+          </Pressable>
         </Card>
 
         <Pressable
@@ -421,6 +437,29 @@ const styles = StyleSheet.create({
     color: color.textDim,
     fontSize: font.caption,
     lineHeight: 18,
+  },
+  newSession: {
+    minHeight: 44,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.sm,
+    alignSelf: "flex-start",
+    paddingVertical: space.xs,
+  },
+  newSessionBusy: {
+    opacity: 0.55,
+  },
+  newSessionLabel: {
+    color: color.accent,
+    fontSize: font.label,
+    fontWeight: "700",
+  },
+  confirmOverlay: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: inset.bottom + space.lg,
+    zIndex: 20,
   },
   remove: {
     minHeight: 44,

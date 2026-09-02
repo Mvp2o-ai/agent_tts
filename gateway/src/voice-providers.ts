@@ -42,6 +42,8 @@ export interface SttAdapter {
   open(opts: {
     onEvent: (ev: TranscriptEvent) => void;
     onError: (err: Error) => void;
+    /** Fires after all transcript events have drained from a finished stream. */
+    onEnd: () => void;
   }): SttStream;
 }
 

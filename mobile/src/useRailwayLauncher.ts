@@ -364,7 +364,7 @@ export function useRailwayLauncher({
       const originState = profile.origin
         ? railwayStateFromOrigin(profile.origin)
         : null;
-      const state = originState ?? record?.state;
+      const state = record?.state ?? originState;
       const providerCredentialId =
         profile.providerCredentialId ?? record?.providerCredentialId;
       if (!record || !state || !providerCredentialId) {
