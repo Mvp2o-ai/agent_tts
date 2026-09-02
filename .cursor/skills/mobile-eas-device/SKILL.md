@@ -1,16 +1,16 @@
 ---
 name: mobile-eas-device
 description: >-
-  Retrieves the correct EAS Safari install URL for agent_tts. Use when the user
-  asks for a phone link, install link, EAS/expo.dev URL, standalone/preview
-  build, leave-the-Mac install, or development-client install.
+  Retrieves or submits the current EAS phone build for agent_tts. Use when the
+  user asks for a phone link, install link, EAS/expo.dev URL,
+  standalone/preview build, leave-the-Mac install, or development-client
+  install.
 ---
 
 # agent_tts — EAS install links
 
-Skills retrieve things. This one retrieves an `https://expo.dev/.../builds/...`
-URL. Never invent it. Never ask which kind. Never output `exp+…` or
-`agenttts://…`.
+Return an `https://expo.dev/.../builds/...` URL for the requested source. Never
+invent it. Never ask which kind. Never output `exp+…` or `agenttts://…`.
 
 Simulator / Metro / localhost are not this skill — just run Expo against
 `127.0.0.1` and open the sim.
@@ -22,10 +22,17 @@ Simulator / Metro / localhost are not this skill — just run Expo against
 **Say:** leave/close Mac, no Metro, standalone, preview, Safari install, vague
 “give me a link” / “URL” / “phone link”
 
+First inspect the latest `preview` build’s `gitCommitHash`. Reuse it only when
+there are no changes under `mobile/` between that commit and the requested
+release commit. A finished build is not necessarily the current build.
+
 ```bash
 # from mobile/
-bash scripts/print-dev-link.sh ios preview
-# if NO_BUILD_FOUND:
+npx eas-cli build:list --platform ios --limit 10 --json --non-interactive
+# Select the newest preview candidate, then from the repository root:
+git diff --quiet <candidate-gitCommitHash> <release-commit> -- mobile
+
+# If no current preview exists:
 npx eas-cli build --profile preview --platform ios --non-interactive --no-wait
 bash scripts/print-dev-link.sh ios preview
 ```
@@ -46,7 +53,14 @@ bash scripts/print-dev-link.sh ios development
 ## Rules
 
 - Default ambiguous requests to **standalone (preview)**.
+- “Current” or “latest” means the requested release’s mobile source, not merely
+  the newest build returned by EAS.
+- This project has no OTA delivery. Rebuild preview for mobile JavaScript
+  changes as well as native changes.
+- Submit with `--no-wait`; return the build-page URL immediately. Do not wait
+  on GitHub CI, Dependabot, or unrelated PRs.
 - Do not give a development build when they want to leave the Mac.
 - Product paths: `npm run install:device -- ios` (preview),
   `npm run eas:device:ios` (development).
 - EAS project id / owner live in gitignored `mobile/eas-project.local.json`.
+- Never deploy or inspect Railway while fulfilling an EAS build request.
