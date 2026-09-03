@@ -293,7 +293,7 @@ function withProtectedSpans(text: string, rewrite: (exposed: string) => string):
  */
 export function incompleteNumericHoldStart(text: string): number | null {
   if (!text) return null;
-  const match = text.match(/(?:[$€£]\s*)?(?:\+?\d[\d,.\-/()]*|\(\d{0,3}|[$€£])$/);
+  const match = text.match(/(?:[$€£]\s*)?(?:\+?\d[\d,.:\-/()]*|\(\d{0,3}|[$€£])$/);
   if (!match || match.index === undefined) return null;
   const start = match.index;
   const token = match[0];

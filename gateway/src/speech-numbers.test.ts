@@ -63,4 +63,9 @@ describe("incompleteNumericHoldStart", () => {
     assert.equal(incompleteNumericHoldStart("Call 555-"), "Call ".length);
     assert.equal(incompleteNumericHoldStart("id v1"), null);
   });
+
+  it("holds incomplete clock times before the hour digit", () => {
+    assert.equal(incompleteNumericHoldStart("Meet at 3:"), "Meet at ".length);
+    assert.equal(incompleteNumericHoldStart("Meet at 3:30"), "Meet at ".length);
+  });
 });

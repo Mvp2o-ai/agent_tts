@@ -10,6 +10,7 @@ import type { BoxConnection } from "./box-client.js";
 import type { BoxInbound, BoxOutbound } from "./box-protocol.js";
 import { defaultConfig } from "./config-schema.js";
 import type { TtsStream } from "./elevenlabs.js";
+import { PlayoutClock } from "./playout-clock.js";
 
 class MemoryBox implements BoxConnection {
   sent: BoxInbound[] = [];
@@ -97,6 +98,7 @@ function setup(openTts?: OpenTts) {
     onIdle: () => {
       idleCount += 1;
     },
+    playoutClock: new PlayoutClock(0, true),
   });
   turn.initialize();
   box.emit({ type: "ready", repositories: 0 });
@@ -422,6 +424,7 @@ describe("AgentTurn", () => {
     );
 
     streams[0].onEnd();
+    await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(box.prompts().length, 2);
     assert.equal(box.prompts()[1].text, "two");
     assert.notEqual(streams[0], streams[1]);
@@ -442,6 +445,7 @@ describe("AgentTurn", () => {
     box.emit({ type: "done", promptId: id2 });
     assert.equal(streams[1].finished, true);
     streams[1].onEnd();
+    await new Promise<void>((resolve) => setImmediate(resolve));
 
     const starts = events.filter((e) => e.type === "prompt_start");
     const dones = events.filter((e) => e.type === "done");
@@ -531,6 +535,42 @@ describe("AgentTurn", () => {
     fail?.(new Error("vendor down"));
     assert.equal(events.filter((e) => e.type === "error").length, 1);
     assert.equal(events.some((e) => e.type === "tts_end"), false);
+    assert.equal(box.prompts().length, 2);
+    await turn.close();
+  });
+
+  it("waits for estimated client playout before starting the next prompt", async () => {
+    const clock = new PlayoutClock(20);
+    const box = new MemoryBox();
+    const events: ClientEvent[] = [];
+    const sink: VoiceSink = {
+      sendJson: (e) => events.push(e),
+      sendAudio: () => undefined,
+    };
+    const factory: OpenTts = (opts) => ({
+      pushText() {
+        opts.onAudio(Buffer.alloc(4_800));
+      },
+      finish() {
+        opts.onEnd?.();
+      },
+      flush() {},
+      close() {},
+    });
+    const turn = new AgentTurn(box, sink, defaultConfig("u"), undefined, {
+      openTts: factory,
+      playoutClock: clock,
+    });
+    turn.initialize();
+    box.emit({ type: "ready", repositories: 0 });
+    turn.enqueue("one");
+    turn.enqueue("two");
+    const id1 = box.prompts()[0].id;
+    box.emit({ type: "chunk", promptId: id1, text: "First reply. " });
+    box.emit({ type: "done", promptId: id1 });
+    assert.equal(clock.isActive(), true);
+    assert.equal(box.prompts().length, 1);
+    await new Promise((resolve) => setTimeout(resolve, 160));
     assert.equal(box.prompts().length, 2);
     await turn.close();
   });

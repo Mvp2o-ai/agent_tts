@@ -1,6 +1,7 @@
 import type { BoxConnection } from "./box-client.js";
 import { isTerminal, type BoxInbound, type BoxOutbound } from "./box-protocol.js";
 import type { UserConfig } from "./config-schema.js";
+import { PlayoutClock } from "./playout-clock.js";
 import { PromptQueue } from "./prompt-queue.js";
 import { SpeechBuffer } from "./speech-buffer.js";
 import { verbalizeNumbersForTts } from "./speech-numbers.js";
@@ -58,6 +59,8 @@ function promptInbound(
 export interface AgentTurnOptions {
   openTts?: OpenTts;
   onIdle?: () => void;
+  /** Tests inject a disabled clock so drain is a no-op. */
+  playoutClock?: PlayoutClock;
   /**
    * Re-read on every prompt dispatch so model/effort changes apply on the
    * next turn without a session reset. Harness stays snapshotted.
@@ -73,6 +76,9 @@ export interface AgentTurnOptions {
  *             │            └──abort──► stopping ──► idle   (`stopped`; no `done`)
  *             │                                      │
  *             │                         abort/barge/error also leave draining
+ *
+ * `draining` waits for the vendor TTS stream to finish and for estimated
+ * client playout to drain before the next prompt starts.
  *
  * `stopped` replaces `done` for an aborted harness turn. The queue stays
  * busy until the current turn's TTS stream ends so a finished stream is
@@ -100,6 +106,8 @@ export class AgentTurn {
   private readonly openTts?: OpenTts;
   private readonly onIdle?: () => void;
   private readonly getConfig?: () => Promise<UserConfig>;
+  private readonly playoutClock: PlayoutClock;
+  private playoutDrainGen = 0;
   private promptDispatched = false;
   private readonly ttsAdapter?: TtsAdapter;
 
@@ -127,6 +135,7 @@ export class AgentTurn {
     this.openTts = options.openTts;
     this.onIdle = options.onIdle;
     this.getConfig = options.getConfig;
+    this.playoutClock = options.playoutClock ?? new PlayoutClock();
     this.ready = new Promise<void>((resolve, reject) => {
       this.resolveReady = resolve;
       this.rejectReady = reject;
@@ -418,6 +427,7 @@ export class AgentTurn {
         voiceId,
         onAudio: (pcm) => {
           if (this.ttsGen !== gen || this.muted) return;
+          this.playoutClock.noteBytes(pcm.length);
           this.sink.sendAudio(pcm);
         },
         onError: (err) => {
@@ -435,6 +445,8 @@ export class AgentTurn {
   }
 
   private stopTts(): void {
+    this.playoutDrainGen += 1;
+    this.playoutClock.reset();
     this.ttsGen += 1;
     this.speaking = false;
     this.tts?.close();
@@ -442,6 +454,8 @@ export class AgentTurn {
   }
 
   private failTts(): void {
+    this.playoutDrainGen += 1;
+    this.playoutClock.reset();
     this.ttsGen += 1;
     this.speaking = false;
     this.tts?.close();
@@ -450,8 +464,17 @@ export class AgentTurn {
   }
 
   private onTtsEnded(): void {
-    this.speaking = false;
+    const gen = ++this.playoutDrainGen;
     this.tts = null;
+    void this.completeSpeechEnd(gen);
+  }
+
+  private async completeSpeechEnd(gen: number): Promise<void> {
+    await this.playoutClock.drain(
+      () => this.closed || gen !== this.playoutDrainGen,
+    );
+    if (this.closed || gen !== this.playoutDrainGen) return;
+    this.speaking = false;
     this.sink.sendJson({ type: "tts_end" });
     if (this.phase === "draining") this.releaseDrain();
   }
