@@ -150,6 +150,7 @@ export function useRailwayProvider(
       return {
         status: launcher.authorizationState,
         message: launcher.authorizationMessage || launcher.error,
+        diagnostic: launcher.lastDiagnostic,
         busy: launcher.oauthBusy,
         reconnect: () => {
           void launcher.connect();

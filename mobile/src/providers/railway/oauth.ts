@@ -21,7 +21,10 @@ export const RAILWAY_OAUTH_SCOPES = [
   "email",
   "profile",
   "offline_access",
-  "workspace:member",
+  // projectDelete / serviceDelete are refused for workspace:member OAuth
+  // tokens (HTTP 200 + GraphQL "Not Authorized"). Railway requires
+  // workspace:admin or project:admin for those mutations.
+  "workspace:admin",
 ] as const;
 
 export interface RailwayOAuthCredential {

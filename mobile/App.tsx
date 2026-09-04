@@ -1226,10 +1226,19 @@ export default function App() {
         settings,
         credentials,
       );
-      await saveConfig(
-        connectionFor(profile, settings.userId),
-        gatewayConfigPatchForProfile(profile, settings, modelKeys),
-      );
+      try {
+        await saveConfig(
+          connectionFor(profile, settings.userId),
+          gatewayConfigPatchForProfile(profile, settings, modelKeys),
+        );
+      } catch (err) {
+        console.log(
+          `[gateway] config-save-failed agentId=${profile.id} message=${
+            err instanceof Error ? err.message : "config save failed"
+          }`,
+        );
+        throw err;
+      }
       if (!provider) {
         patchAgent(profile.id, { desiredState: "running" });
       }

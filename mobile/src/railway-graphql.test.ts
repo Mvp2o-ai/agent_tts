@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   isRailwayAuthorizationFailure,
+  isRailwayResourceDenied,
+  isRailwaySessionExpired,
   railwayGraphql,
   RailwayApiError,
 } from "./providers/railway/graphql";
@@ -81,12 +83,20 @@ describe("Railway GraphQL transport", () => {
     );
   });
 
-  it("identifies expired and rejected Railway authorization", () => {
+  it("identifies expired sessions separately from resource denials", () => {
     assert.equal(
-      isRailwayAuthorizationFailure(
+      isRailwaySessionExpired(
         new RailwayApiError("request rejected", { status: 401 }),
       ),
       true,
+    );
+    assert.equal(
+      isRailwayResourceDenied(new RailwayApiError("Not Authorized")),
+      true,
+    );
+    assert.equal(
+      isRailwaySessionExpired(new RailwayApiError("Not Authorized")),
+      false,
     );
     assert.equal(
       isRailwayAuthorizationFailure(new RailwayApiError("Not Authorized")),
@@ -96,11 +106,33 @@ describe("Railway GraphQL transport", () => {
       isRailwayAuthorizationFailure(
         new RailwayApiError("not permitted", { code: "FORBIDDEN" }),
       ),
-      false,
+      true,
     );
     assert.equal(
       isRailwayAuthorizationFailure(new Error("network request failed")),
       false,
+    );
+  });
+
+  it("attaches the GraphQL operation name to failures", async () => {
+    await assert.rejects(
+      () =>
+        railwayGraphql(
+          "oauth-access",
+          "mutation AgentTtsProjectDelete($id: String!) { projectDelete(id: $id) }",
+          { id: "project-1" },
+          async () =>
+            Response.json({
+              data: null,
+              errors: [{ message: "Not Authorized" }],
+            }),
+        ),
+      (error: unknown) => {
+        assert.ok(error instanceof RailwayApiError);
+        assert.equal(error.operation, "AgentTtsProjectDelete");
+        assert.equal(error.resources?.id, "project-1");
+        return true;
+      },
     );
   });
 });

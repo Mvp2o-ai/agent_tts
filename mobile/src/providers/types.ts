@@ -81,6 +81,7 @@ export interface ProviderSetupContext {
 export interface ProviderAccountConnection {
   status: "checking" | "connected" | "reconnect-required" | "unavailable";
   message?: string;
+  diagnostic?: string;
   busy?: boolean;
   reconnect: () => void;
 }

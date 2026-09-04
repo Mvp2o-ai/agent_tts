@@ -4,6 +4,7 @@ import {
   classifyIncomingFrame,
   connectionError,
   gatewayAuthHeaders,
+  diagnosticsUrl,
   healthUrl,
   httpToWs,
   killSessionUrl,
@@ -57,6 +58,10 @@ describe("protocol", () => {
     assert.equal(
       modelCatalogUrl("https://gw.example/", "claude-code"),
       "https://gw.example/v1/model-catalog?harness=claude-code",
+    );
+    assert.equal(
+      diagnosticsUrl("https://gw.example/"),
+      "https://gw.example/v1/diagnostics",
     );
   });
 

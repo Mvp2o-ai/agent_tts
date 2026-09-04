@@ -122,6 +122,75 @@ describe("gateway http", () => {
     }
   });
 
+  it("writes authenticated client logs to stdout", async () => {
+    const store = new MemoryConfigStore();
+    const { server } = createGateway({
+      token: "test-token",
+      store,
+      deepgramKey: "test-stt-key",
+      boxCommand: ["node", "--import", "tsx", fakeBox],
+    });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const { port } = server.address() as AddressInfo;
+    const lines: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => {
+      lines.push(args.map(String).join(" "));
+    };
+    try {
+      const denied = await fetch(`http://127.0.0.1:${port}/v1/diagnostics`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ channel: "railway", event: "error" }),
+      });
+      assert.equal(denied.status, 401);
+      assert.ok(
+        lines.some((line) => {
+          try {
+            const parsed = JSON.parse(line) as { event?: string; path?: string };
+            return parsed.event === "unauthorized" && parsed.path === "/v1/diagnostics";
+          } catch {
+            return false;
+          }
+        }),
+      );
+
+      const accepted = await fetch(`http://127.0.0.1:${port}/v1/diagnostics`, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer test-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          channel: "railway",
+          event: "error",
+          ts: "2026-09-04T14:00:00.000Z",
+          details: {
+            op: "AgentTtsProjectDelete",
+            token: "must-not-log",
+          },
+        }),
+      });
+      assert.equal(accepted.status, 204);
+      const clientLine = lines
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .find((entry) => entry.src === "client");
+      assert.deepEqual(clientLine, {
+        src: "client",
+        channel: "railway",
+        event: "error",
+        ts: "2026-09-04T14:00:00.000Z",
+        details: { op: "AgentTtsProjectDelete" },
+      });
+    } finally {
+      console.log = originalLog;
+      await new Promise<void>((resolve, reject) =>
+        server.close((err) => (err ? reject(err) : resolve())),
+      );
+      await store.close();
+    }
+  });
+
   it("rejects query-string tokens on HTTP and the voice socket", async () => {
     const store = new MemoryConfigStore();
     const { server } = createGateway({

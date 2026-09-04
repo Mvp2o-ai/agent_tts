@@ -25,7 +25,7 @@ describe("Railway native OAuth", () => {
     assert.equal(url.searchParams.get("code_challenge"), "challenge-1");
     assert.equal(url.searchParams.get("code_challenge_method"), "S256");
     assert.equal(url.searchParams.get("prompt"), "consent");
-    assert.match(url.searchParams.get("scope") ?? "", /workspace:member/);
+    assert.match(url.searchParams.get("scope") ?? "", /workspace:admin/);
     assert.equal(url.searchParams.has("client_secret"), false);
   });
 

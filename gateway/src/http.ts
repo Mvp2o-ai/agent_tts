@@ -155,8 +155,7 @@ async function handleHttp(
   }
 
   if (req.method === "GET" && url.pathname === "/v1/capabilities") {
-    if (!authorize(req, opts.token)) {
-      json(res, 401, { error: "unauthorized" });
+    if (rejectUnauthorized(req, res, url, opts.token)) {
       return;
     }
     json(res, 200, {
@@ -179,8 +178,7 @@ async function handleHttp(
   }
 
   if (req.method === "GET" && url.pathname === "/v1/harnesses") {
-    if (!authorize(req, opts.token)) {
-      json(res, 401, { error: "unauthorized" });
+    if (rejectUnauthorized(req, res, url, opts.token)) {
       return;
     }
     json(res, 200, { harnesses: HARNESS_ORDER });
@@ -188,8 +186,7 @@ async function handleHttp(
   }
 
   if (req.method === "GET" && url.pathname === "/v1/model-catalog") {
-    if (!authorize(req, opts.token)) {
-      json(res, 401, { error: "unauthorized" });
+    if (rejectUnauthorized(req, res, url, opts.token)) {
       return;
     }
     const userId = url.searchParams.get("userId") || "default";
@@ -205,8 +202,7 @@ async function handleHttp(
   }
 
   if (url.pathname === "/v1/config") {
-    if (!authorize(req, opts.token)) {
-      json(res, 401, { error: "unauthorized" });
+    if (rejectUnauthorized(req, res, url, opts.token)) {
       return;
     }
     const userId = url.searchParams.get("userId") || "default";
@@ -222,8 +218,7 @@ async function handleHttp(
   }
 
   if (req.method === "POST" && url.pathname === "/v1/session/kill") {
-    if (!authorize(req, opts.token)) {
-      json(res, 401, { error: "unauthorized" });
+    if (rejectUnauthorized(req, res, url, opts.token)) {
       return;
     }
     const userId = url.searchParams.get("userId") || "default";
@@ -235,8 +230,7 @@ async function handleHttp(
   // New session = new container. Close everything, then let onReset exit the
   // process; the operator's platform recreates the container from the image.
   if (req.method === "POST" && url.pathname === "/v1/session/reset") {
-    if (!authorize(req, opts.token)) {
-      json(res, 401, { error: "unauthorized" });
+    if (rejectUnauthorized(req, res, url, opts.token)) {
       return;
     }
     for (const session of sessions.values()) {
@@ -249,11 +243,14 @@ async function handleHttp(
   }
 
   if (req.method === "POST" && url.pathname === "/v1/debug/prompt") {
-    if (!authorize(req, opts.token)) {
-      json(res, 401, { error: "unauthorized" });
-      return;
-    }
+    if (rejectUnauthorized(req, res, url, opts.token)) return;
     await debugPrompt(req, res, runtime);
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/v1/diagnostics") {
+    if (rejectUnauthorized(req, res, url, opts.token)) return;
+    await ingestClientLog(req, res);
     return;
   }
 
@@ -327,6 +324,7 @@ async function handleVoice(
   const { opts } = runtime;
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   if (!authorize(req, opts.token)) {
+    logUnauthorized(req, url);
     ws.close(4401, "unauthorized");
     return;
   }
@@ -675,6 +673,82 @@ function authorize(req: IncomingMessage, token: string): boolean {
   const header = req.headers.authorization;
   if (!token || !header?.startsWith("Bearer ")) return false;
   return header.slice("Bearer ".length) === token;
+}
+
+function logUnauthorized(req: IncomingMessage, url: URL): void {
+  console.log(
+    JSON.stringify({
+      src: "gateway",
+      event: "unauthorized",
+      method: req.method ?? "",
+      path: url.pathname,
+    }),
+  );
+}
+
+function rejectUnauthorized(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  token: string,
+): boolean {
+  if (authorize(req, token)) return false;
+  logUnauthorized(req, url);
+  json(res, 401, { error: "unauthorized" });
+  return true;
+}
+
+async function ingestClientLog(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  let body: unknown;
+  try {
+    body = await readJson(req);
+  } catch {
+    json(res, 400, { error: "invalid json" });
+    return;
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    json(res, 400, { error: "invalid log" });
+    return;
+  }
+  const record = body as {
+    channel?: unknown;
+    event?: unknown;
+    ts?: unknown;
+    details?: unknown;
+  };
+  if (typeof record.channel !== "string" || typeof record.event !== "string") {
+    json(res, 400, { error: "invalid log" });
+    return;
+  }
+  const details =
+    record.details &&
+    typeof record.details === "object" &&
+    !Array.isArray(record.details)
+      ? Object.fromEntries(
+          Object.entries(record.details as Record<string, unknown>).filter(
+            ([key, value]) =>
+              !/token|secret|authorization|password/i.test(key) &&
+              (typeof value === "string" ||
+                typeof value === "number" ||
+                typeof value === "boolean"),
+          ),
+        )
+      : {};
+  const line = JSON.stringify({
+    src: "client",
+    channel: record.channel,
+    event: record.event,
+    ...(typeof record.ts === "string" ? { ts: record.ts } : {}),
+    details,
+  });
+  res.writeHead(204);
+  res.end();
+  setImmediate(() => {
+    console.log(line);
+  });
 }
 
 function bufferText(raw: unknown): string {

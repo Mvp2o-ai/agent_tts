@@ -60,9 +60,6 @@ export function AgentDetailScreen({
 }) {
   const [editingName, setEditingName] = useState(false);
   const [confirmingSession, setConfirmingSession] = useState(false);
-  const accountBlocked =
-    accountConnection !== undefined &&
-    accountConnection.status !== "connected";
 
   return (
     <View style={styles.root}>
@@ -138,6 +135,11 @@ export function AgentDetailScreen({
               {accountConnection.message ||
                 `Reconnect ${hostLabel} to manage this agent.`}
             </Text>
+            {accountConnection.diagnostic ? (
+              <Text selectable style={styles.diagnostic}>
+                {accountConnection.diagnostic}
+              </Text>
+            ) : null}
             {accountConnection.status !== "checking" ? (
               <Button
                 label={`Reconnect ${hostLabel}`}
@@ -146,6 +148,20 @@ export function AgentDetailScreen({
                 onPress={accountConnection.reconnect}
               />
             ) : null}
+          </Card>
+        ) : null}
+        {accountConnection?.diagnostic &&
+        accountConnection.status === "connected" ? (
+          <Card style={styles.lifecycleCard}>
+            <Text style={styles.lifecycleTitle}>Last Railway error</Text>
+            <Text selectable style={styles.diagnostic}>
+              {accountConnection.diagnostic}
+            </Text>
+            <Button
+              label={`Reconnect ${hostLabel}`}
+              busy={accountConnection.busy}
+              onPress={accountConnection.reconnect}
+            />
           </Card>
         ) : null}
         {gone ? (
@@ -161,19 +177,15 @@ export function AgentDetailScreen({
               label="Launch replacement"
               tone="primary"
               busy={lifecycleBusy}
-              disabled={accountBlocked}
               icon={<PowerIcon size={18} color={color.bg} />}
               onPress={onReplace}
             />
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={`Delete agent ${name}`}
-              disabled={removing || accountBlocked}
+              disabled={removing}
               onPress={onRemove}
-              style={[
-                styles.remove,
-                (removing || accountBlocked) && styles.removeDisabled,
-              ]}
+              style={[styles.remove, removing && styles.removeDisabled]}
             >
               <TrashIcon size={16} color={color.danger} />
               <Text style={styles.removeText}>
@@ -190,7 +202,6 @@ export function AgentDetailScreen({
             token={token}
             lifecycleBusy={lifecycleBusy}
             removing={removing}
-            accountConnection={accountConnection}
             configuration={configuration}
             name={name}
             onGatewayUrlChange={onGatewayUrlChange}
@@ -225,7 +236,6 @@ function AgentDetailBody({
   token,
   lifecycleBusy,
   removing,
-  accountConnection,
   configuration,
   name,
   onGatewayUrlChange,
@@ -240,7 +250,6 @@ function AgentDetailBody({
   token: string;
   lifecycleBusy?: boolean;
   removing?: boolean;
-  accountConnection?: ProviderAccountConnection;
   configuration?: ReactNode;
   name: string;
   onGatewayUrlChange: (value: string) => void;
@@ -248,11 +257,6 @@ function AgentDetailBody({
   onNewSession: () => void;
   onRemove: () => void;
 }) {
-  const lifecycleBlocked =
-    accountConnection !== undefined &&
-    accountConnection.status !== "connected";
-  const providerName = hostLabel;
-
   return (
     <>
         <Card style={styles.statusCard}>
@@ -305,33 +309,16 @@ function AgentDetailBody({
             A new session recreates this container. Commit and push your work
             first; uncommitted or unpushed work is lost.
           </Text>
-          {lifecycleBlocked ? (
-            <Text style={styles.lifecycleBlocked}>
-              Reconnect {providerName} before starting a new session.
-            </Text>
-          ) : null}
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="New session"
             accessibilityHint="Recreates this agent's container."
-            accessibilityState={{ disabled: lifecycleBusy || lifecycleBlocked }}
-            disabled={lifecycleBusy || lifecycleBlocked}
+            disabled={lifecycleBusy}
             onPress={onNewSession}
-            style={[
-              styles.newSession,
-              (lifecycleBusy || lifecycleBlocked) && styles.newSessionBusy,
-            ]}
+            style={[styles.newSession, lifecycleBusy && styles.newSessionBusy]}
           >
-            <RefreshIcon
-              size={18}
-              color={lifecycleBlocked ? color.textDim : color.accent}
-            />
-            <Text
-              style={[
-                styles.newSessionLabel,
-                lifecycleBlocked && styles.newSessionLabelBlocked,
-              ]}
-            >
+            <RefreshIcon size={18} color={color.accent} />
+            <Text style={styles.newSessionLabel}>
               {lifecycleBusy ? "Starting new session…" : "New session"}
             </Text>
           </Pressable>
@@ -340,12 +327,9 @@ function AgentDetailBody({
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={`Delete agent ${name}`}
-          disabled={removing || lifecycleBlocked}
+          disabled={removing}
           onPress={onRemove}
-          style={[
-            styles.remove,
-            (removing || lifecycleBlocked) && styles.removeDisabled,
-          ]}
+          style={[styles.remove, removing && styles.removeDisabled]}
         >
           <TrashIcon size={16} color={color.danger} />
           <Text style={styles.removeText}>
@@ -499,10 +483,11 @@ const styles = StyleSheet.create({
     fontSize: font.caption,
     lineHeight: 18,
   },
-  lifecycleBlocked: {
-    color: color.warn,
-    fontSize: font.caption,
-    lineHeight: 18,
+  diagnostic: {
+    color: color.textMuted,
+    fontSize: font.micro,
+    lineHeight: 16,
+    fontVariant: ["tabular-nums"],
   },
   newSession: {
     minHeight: 44,
@@ -519,9 +504,6 @@ const styles = StyleSheet.create({
     color: color.accent,
     fontSize: font.label,
     fontWeight: "700",
-  },
-  newSessionLabelBlocked: {
-    color: color.textDim,
   },
   confirmOverlay: {
     position: "absolute",
