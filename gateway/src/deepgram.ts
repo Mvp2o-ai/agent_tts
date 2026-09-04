@@ -26,6 +26,26 @@ export interface SttTransport {
   removeAllListeners(event?: string): this;
 }
 
+/**
+ * How long Deepgram waits after the last word before declaring the turn over.
+ * Hands-free treats UtteranceEnd as "you are done talking", so this is really
+ * a thinking-pause budget: too low and a mid-sentence pause ships a fragment.
+ * Deepgram rejects values below 1000; cap at 5000 so a typo cannot strand a
+ * turn for a minute. VoiceInput's continuation window covers the overshoot.
+ */
+export const DEFAULT_UTTERANCE_END_MS = 2500;
+export const MIN_UTTERANCE_END_MS = 1000;
+export const MAX_UTTERANCE_END_MS = 5000;
+
+export function resolveUtteranceEndMs(raw: string | undefined): number {
+  const parsed = Number(raw);
+  if (!raw || !Number.isFinite(parsed)) return DEFAULT_UTTERANCE_END_MS;
+  return Math.min(
+    MAX_UTTERANCE_END_MS,
+    Math.max(MIN_UTTERANCE_END_MS, Math.round(parsed)),
+  );
+}
+
 export function openDeepgram(opts: {
   apiKey: string;
   onEvent: (ev: TranscriptEvent) => void;
@@ -40,7 +60,9 @@ export function openDeepgram(opts: {
     interim_results: "true",
     punctuate: "true",
     endpointing: "300",
-    utterance_end_ms: "1200",
+    utterance_end_ms: String(
+      resolveUtteranceEndMs(process.env.STT_UTTERANCE_END_MS),
+    ),
     vad_events: "true",
     smart_format: "true",
   });

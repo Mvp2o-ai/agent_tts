@@ -4,6 +4,10 @@ import { EventEmitter } from "node:events";
 import WebSocket from "ws";
 import {
   attachStreamingStt,
+  DEFAULT_UTTERANCE_END_MS,
+  MAX_UTTERANCE_END_MS,
+  MIN_UTTERANCE_END_MS,
+  resolveUtteranceEndMs,
   STT_PREOPEN_BYTES,
   type SttTransport,
 } from "./deepgram.js";
@@ -123,5 +127,26 @@ describe("attachStreamingStt", () => {
     ws.emit("close");
 
     assert.deepEqual(order, ["one two", "three four", "END"]);
+  });
+});
+
+describe("resolveUtteranceEndMs", () => {
+  it("defaults when unset or unparseable", () => {
+    assert.equal(resolveUtteranceEndMs(undefined), DEFAULT_UTTERANCE_END_MS);
+    assert.equal(resolveUtteranceEndMs(""), DEFAULT_UTTERANCE_END_MS);
+    assert.equal(resolveUtteranceEndMs("soon"), DEFAULT_UTTERANCE_END_MS);
+  });
+
+  it("passes through a value Deepgram accepts", () => {
+    assert.equal(resolveUtteranceEndMs("1800"), 1800);
+  });
+
+  it("clamps below Deepgram's floor and above the sanity ceiling", () => {
+    assert.equal(resolveUtteranceEndMs("10"), MIN_UTTERANCE_END_MS);
+    assert.equal(resolveUtteranceEndMs("60000"), MAX_UTTERANCE_END_MS);
+  });
+
+  it("rounds fractional values", () => {
+    assert.equal(resolveUtteranceEndMs("2500.6"), 2501);
   });
 });
