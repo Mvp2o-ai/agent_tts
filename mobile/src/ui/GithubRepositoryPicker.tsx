@@ -55,8 +55,8 @@ export function GithubRepositoryPicker({
             <Text style={styles.statusText}>GitHub is not connected</Text>
           </View>
           <Text style={styles.note}>
-            Connect this agent to GitHub, then choose the repositories its next
-            container session should clone.
+            Connect this agent to GitHub, then choose the repositories every
+            new container session should clone.
           </Text>
           {connectError?.trim() ? (
             <Text style={styles.error}>{connectError.trim()}</Text>
@@ -85,7 +85,7 @@ export function GithubRepositoryPicker({
           ) : null}
           <View style={styles.repositoryHeader}>
             <Text style={styles.selectionCount}>
-              {selectedRepositories.length} selected for next session
+              {selectedRepositories.length} saved for new sessions
             </Text>
             <Button
               tone="ghost"
@@ -102,9 +102,9 @@ export function GithubRepositoryPicker({
           <View style={styles.divider} />
           <Text style={styles.sectionTitle}>Startup repositories</Text>
           <Text style={styles.note}>
-            Checked repositories are cloned under /workspace when the next
-            container session starts. GitHub access itself is available to the
-            current session immediately.
+            Checked repositories are saved on this phone and cloned under
+            /workspace at the start of every new container session. GitHub
+            access itself is available to the current session immediately.
           </Text>
           {availableRepositories.length > 0 ? (
             <Field
@@ -136,7 +136,7 @@ export function GithubRepositoryPicker({
                     accessibilityState={{ checked: selected }}
                     accessibilityLabel={`${repository.fullName}, ${
                       selected ? "selected" : "not selected"
-                    } for next session`}
+                    } startup repository`}
                     onPress={() => onToggleRepository(repository)}
                     style={[
                       styles.repositoryRow,
@@ -165,7 +165,7 @@ export function GithubRepositoryPicker({
                       </Text>
                       <Text style={styles.repositoryVisibility}>
                         {repository.private ? "Private" : "Public"}
-                        {selected ? " · next session" : ""}
+                        {selected ? " · startup" : ""}
                       </Text>
                     </View>
                   </Pressable>

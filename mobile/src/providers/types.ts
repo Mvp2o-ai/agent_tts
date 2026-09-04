@@ -41,6 +41,7 @@ export interface ProviderDefinition {
 
 export interface ProviderSetupContext {
   credentials: CredentialEntry[];
+  settingsHydrated: boolean;
   setSettings: (
     next: DeviceSettings | ((previous: DeviceSettings) => DeviceSettings),
   ) => void;

@@ -29,6 +29,7 @@ export function useRailwayProvider(
 
   const launcher = useRailwayLauncher({
     setSettings: context.setSettings,
+    settingsHydrated: context.settingsHydrated,
     onReady,
     onCredentialsChanged: context.onCredentialsChanged,
     sttProviderId: context.sttProviderId,

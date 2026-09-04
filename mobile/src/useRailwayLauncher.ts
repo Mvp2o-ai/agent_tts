@@ -61,6 +61,7 @@ const RAILWAY_RECONNECT_MESSAGE =
 
 export function useRailwayLauncher({
   setSettings,
+  settingsHydrated,
   onReady,
   onCredentialsChanged,
   sttProviderId,
@@ -69,6 +70,7 @@ export function useRailwayLauncher({
   setSettings: (
     next: DeviceSettings | ((previous: DeviceSettings) => DeviceSettings),
   ) => void;
+  settingsHydrated: boolean;
   onReady: (agentId: string) => void;
   onCredentialsChanged: () => void;
   sttProviderId: string;
@@ -150,6 +152,7 @@ export function useRailwayLauncher({
   }, [loadWorkspaces, rememberFailure]);
 
   useEffect(() => {
+    if (!settingsHydrated) return;
     let active = true;
     const controller = new AbortController();
     void railwayProvisioningStore.list().then(async (records) => {
@@ -247,7 +250,7 @@ export function useRailwayLauncher({
       active = false;
       controller.abort();
     };
-  }, [setSettings]);
+  }, [setSettings, settingsHydrated]);
 
   const connect = useCallback(async (): Promise<RailwayWorkspace[] | null> => {
     setOauthBusy(true);

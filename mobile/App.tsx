@@ -165,10 +165,18 @@ async function syncRailwayRepositoryTemplate(
   );
 }
 
+async function persistAgentGithubState(
+  profile: AgentProfile,
+  flushSettings: () => Promise<void>,
+): Promise<void> {
+  await flushSettings();
+  await syncRailwayRepositoryTemplate(profile);
+}
+
 export default function App() {
   const [mode, setMode] = useState<VoiceMode>("ptt");
   const [pttHeld, setPttHeld] = useState(false);
-  const { settings, setSettings, getSettings, hydrated } =
+  const { settings, setSettings, getSettings, hydrated, flushSettings } =
     useDeviceSettings();
   const [configMsg, setConfigMsg] = useState("");
   const [configOk, setConfigOk] = useState(false);
@@ -269,9 +277,9 @@ export default function App() {
       ) {
         continue;
       }
-      void syncRailwayRepositoryTemplate(profile).catch(() => undefined);
+      void persistAgentGithubState(profile, flushSettings).catch(() => undefined);
     }
-  }, [disconnectedGithubCheckpointSignature]);
+  }, [disconnectedGithubCheckpointSignature, flushSettings]);
 
   const patch = (partial: Partial<DeviceSettings>) =>
     setSettings((prev) => ({ ...prev, ...partial }));
@@ -444,6 +452,7 @@ export default function App() {
 
   const providerRegistry = useProviderRegistry({
     credentials,
+    settingsHydrated: hydrated,
     setSettings,
     onReady: onProviderReady,
     onCredentialsChanged: refreshCredentials,
@@ -815,7 +824,7 @@ export default function App() {
               : profile,
           ),
         }));
-        await syncRailwayRepositoryTemplate(connectedProfile);
+        await persistAgentGithubState(connectedProfile, flushSettings);
       }
       await refreshCredentials();
       ensureCurrent();
@@ -869,7 +878,7 @@ export default function App() {
                 : profile,
             ),
           }));
-          await syncRailwayRepositoryTemplate(connectedProfile);
+          await persistAgentGithubState(connectedProfile, flushSettings);
         }
       }
       setGithubConnectError("");
@@ -917,30 +926,26 @@ export default function App() {
     repository: AttachedRepository,
     agentId = githubManagerAgentId ?? agent.id,
   ) {
-    const updatedProfile = new Promise<AgentProfile | undefined>((resolve) => {
-      setSettings((previous) => {
-        let nextProfile: AgentProfile | undefined;
-        const agents = previous.agents.map((candidate) => {
-          if (candidate.id !== agentId) return candidate;
-          nextProfile = toggleAgentRepository(candidate, repository);
-          return nextProfile;
-        });
-        resolve(nextProfile);
-        return nextProfile ? { ...previous, agents } : previous;
-      });
+    const previous = getSettings();
+    const current = previous.agents.find(
+      (candidate) => candidate.id === agentId,
+    );
+    if (!current) return;
+    const nextProfile = toggleAgentRepository(current, repository);
+    setSettings({
+      ...previous,
+      agents: previous.agents.map((candidate) =>
+        candidate.id === agentId ? nextProfile : candidate,
+      ),
     });
-    void updatedProfile
-      .then((profile) =>
-        profile ? syncRailwayRepositoryTemplate(profile) : undefined,
-      )
-      .catch((error) => {
-        setConfigOk(false);
-        setConfigMsg(
-          error instanceof Error
-            ? error.message
-            : "Could not save startup repositories.",
-        );
-      });
+    void persistAgentGithubState(nextProfile, flushSettings).catch((error) => {
+      setConfigOk(false);
+      setConfigMsg(
+        error instanceof Error
+          ? error.message
+          : "Could not save startup repositories.",
+      );
+    });
   }
 
   function disconnectGithubFromAgent(profile: AgentProfile) {
@@ -968,7 +973,10 @@ export default function App() {
               }));
               let checkpointError: unknown;
               try {
-                await syncRailwayRepositoryTemplate(disconnectedProfile);
+                await persistAgentGithubState(
+                  disconnectedProfile,
+                  flushSettings,
+                );
               } catch (error) {
                 checkpointError = error;
               }
