@@ -33,7 +33,7 @@ export function openDeepgram(opts: {
   onEnd: () => void;
 }): SttStream {
   const params = new URLSearchParams({
-    model: "nova-2",
+    model: "nova-2-phonecall",
     encoding: "linear16",
     sample_rate: String(STT_SAMPLE_RATE),
     channels: "1",
@@ -74,6 +74,7 @@ export function attachStreamingStt(
   let closed = false;
   let finishRequested = false;
   let endNotified = false;
+  let keepalive: ReturnType<typeof setInterval> | undefined;
 
   const notifyEnd = () => {
     if (endNotified) return;
@@ -103,7 +104,14 @@ export function attachStreamingStt(
     pendingBytes = 0;
   };
 
+  const stopKeepalive = () => {
+    if (!keepalive) return;
+    clearInterval(keepalive);
+    keepalive = undefined;
+  };
+
   const sendCloseStream = () => {
+    stopKeepalive();
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: "CloseStream" }));
       setTimeout(() => {
@@ -126,6 +134,12 @@ export function attachStreamingStt(
       return;
     }
     opened = true;
+    keepalive = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "KeepAlive" }));
+      }
+    }, 8_000);
+    keepalive.unref?.();
     for (const chunk of pending) ws.send(chunk);
     discardPending();
     if (finishRequested) sendCloseStream();
@@ -192,6 +206,7 @@ export function attachStreamingStt(
     close() {
       closed = true;
       finishRequested = false;
+      stopKeepalive();
       discardPending();
       try {
         if (ws.readyState === WebSocket.CONNECTING) {
