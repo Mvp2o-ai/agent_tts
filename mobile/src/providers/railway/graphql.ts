@@ -18,6 +18,7 @@ export class RailwayApiError extends Error {
   readonly code?: string;
   readonly traceId?: string;
   readonly retryAfterSeconds?: number;
+  readonly status?: number;
 
   constructor(
     message: string,
@@ -25,6 +26,7 @@ export class RailwayApiError extends Error {
       code?: string;
       traceId?: string;
       retryAfterSeconds?: number;
+      status?: number;
     } = {},
   ) {
     super(message);
@@ -32,7 +34,29 @@ export class RailwayApiError extends Error {
     this.code = details.code;
     this.traceId = details.traceId;
     this.retryAfterSeconds = details.retryAfterSeconds;
+    this.status = details.status;
   }
+}
+
+export function isRailwayAuthorizationFailure(error: unknown): boolean {
+  if (
+    error instanceof RailwayApiError &&
+    (error.status === 401 ||
+      error.code === "UNAUTHENTICATED" ||
+      error.code === "UNAUTHORIZED" ||
+      error.code === "TOKEN_EXPIRED")
+  ) {
+    return true;
+  }
+  const message = error instanceof Error ? error.message.toLowerCase() : "";
+  return (
+    message.includes("not authorized") ||
+    message.includes("unauthorized") ||
+    message.includes("authorization expired") ||
+    message.includes("authorization failed") ||
+    message.includes("authorization is missing") ||
+    message.includes("railway credential is unavailable")
+  );
 }
 
 export async function railwayGraphql<T>(
@@ -64,7 +88,7 @@ export async function railwayGraphql<T>(
       response.ok
         ? "Railway returned an invalid response"
         : `Railway request failed: ${response.status}`,
-      { retryAfterSeconds: retryAfter },
+      { retryAfterSeconds: retryAfter, status: response.status },
     );
   }
 
@@ -97,6 +121,7 @@ export async function railwayGraphql<T>(
       ...(retryAfter !== undefined
         ? { retryAfterSeconds: retryAfter }
         : {}),
+      status: response.status,
     });
   }
 

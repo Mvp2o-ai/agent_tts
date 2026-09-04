@@ -94,6 +94,7 @@ export function useRailwayProvider(
             selectedRepositories: repositories,
             busy: context.repositorySetup.busy,
             search: context.repositorySetup.search,
+            connectError: context.repositorySetup.connectError,
             onSearchChange: context.repositorySetup.onSearchChange,
             onRefresh: () => {
               void context.repositorySetup
@@ -144,6 +145,16 @@ export function useRailwayProvider(
     },
     hostLabel() {
       return "Railway";
+    },
+    accountConnection() {
+      return {
+        status: launcher.authorizationState,
+        message: launcher.authorizationMessage || launcher.error,
+        busy: launcher.oauthBusy,
+        reconnect: () => {
+          void launcher.connect();
+        },
+      };
     },
     async startAgent(profile) {
       await launcher.startAgent(profile);

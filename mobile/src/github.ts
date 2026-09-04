@@ -104,6 +104,13 @@ export async function pollGithubDeviceToken(
      * runs immediately. Returns an unsubscribe function.
      */
     onWake?: (wake: () => void) => () => void;
+    onStatus?: (
+      status:
+        | "authorization_pending"
+        | "authorized"
+        | "slow_down"
+        | "transient_error",
+    ) => void;
   } = {},
 ): Promise<GithubCredential> {
   const request = options.request ?? fetch;
@@ -146,20 +153,45 @@ export async function pollGithubDeviceToken(
       });
     } catch (error) {
       if (options.signal?.aborted) throw new Error("GitHub connection cancelled");
+      // Opening Safari backgrounds the app; iOS often fails the in-flight
+      // poll. Keep waiting for the same device code instead of discarding
+      // an authorization the user may already have approved.
+      if (isTransientGithubDevicePollError(error)) {
+        options.onStatus?.("transient_error");
+        continue;
+      }
       throw error;
     }
-    const data = (await response.json()) as Record<string, unknown>;
+    let data: Record<string, unknown>;
+    try {
+      data = (await response.json()) as Record<string, unknown>;
+    } catch {
+      options.onStatus?.("transient_error");
+      continue;
+    }
     if (response.ok && typeof data.access_token === "string") {
+      options.onStatus?.("authorized");
       return credentialFromTokenResponse(data, now());
     }
-    if (data.error === "authorization_pending") continue;
+    if (data.error === "authorization_pending") {
+      options.onStatus?.("authorization_pending");
+      continue;
+    }
     if (data.error === "slow_down") {
+      options.onStatus?.("slow_down");
       interval += 5_000;
       continue;
     }
     throw new Error(githubError(data, "GitHub authentication failed"));
   }
   throw new Error("GitHub device authorization expired");
+}
+
+export function isTransientGithubDevicePollError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /network request failed|failed to fetch|aborted|the network connection was lost|load failed|timed out|network error/i.test(
+    message,
+  );
 }
 
 async function waitForNextGithubPoll(

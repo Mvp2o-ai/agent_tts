@@ -53,6 +53,12 @@ describe("Railway durable provisioning checkpoints", () => {
     assert.equal(serialized.includes("gateway-token"), false);
     assert.equal(serialized.includes("deepgramCredentialId"), false);
     assert.equal(serialized.includes("github-token"), false);
+
+    await store.updateProviderCredential(record.agentId, "provider-reconnected");
+    assert.equal(
+      (await store.list())[0]?.providerCredentialId,
+      "provider-reconnected",
+    );
   });
 
   it("migrates v1 named credential IDs on read", async () => {

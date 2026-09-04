@@ -120,6 +120,19 @@ export function createRailwayProvisioningStore(
       });
     },
 
+    async updateProviderCredential(
+      agentId: string,
+      providerCredentialId: string,
+    ): Promise<RailwayProvisioningRecord | undefined> {
+      return withWriteLock(agentId, async () => {
+        const current = await read(agentId);
+        if (!current) return undefined;
+        const next = { ...current, providerCredentialId };
+        await write(next);
+        return next;
+      });
+    },
+
     async list(): Promise<RailwayProvisioningRecord[]> {
       await Promise.all([...pendingWrites.values()]);
       const keys = (await storage.getAllKeys()).filter((key) =>

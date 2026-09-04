@@ -12,6 +12,7 @@ export function GithubRepositoryPicker({
   selectedRepositories,
   busy,
   search,
+  connectError,
   onSearchChange,
   onConnectGithub,
   onRefresh,
@@ -23,6 +24,7 @@ export function GithubRepositoryPicker({
   selectedRepositories: AttachedRepository[];
   busy?: boolean;
   search: string;
+  connectError?: string;
   onSearchChange: (value: string) => void;
   /** Inline device-flow connect from this agent's setup. */
   onConnectGithub?: () => void;
@@ -56,6 +58,9 @@ export function GithubRepositoryPicker({
             Connect this agent to GitHub, then choose the repositories its next
             container session should clone.
           </Text>
+          {connectError?.trim() ? (
+            <Text style={styles.error}>{connectError.trim()}</Text>
+          ) : null}
           {onConnectGithub ? (
             <Button
               tone="primary"
@@ -75,6 +80,9 @@ export function GithubRepositoryPicker({
                 : `Connected as ${accountLabel}`}
             </Text>
           </View>
+          {connectError?.trim() ? (
+            <Text style={styles.error}>{connectError.trim()}</Text>
+          ) : null}
           <View style={styles.repositoryHeader}>
             <Text style={styles.selectionCount}>
               {selectedRepositories.length} selected for next session
@@ -280,6 +288,11 @@ const styles = StyleSheet.create({
   },
   note: {
     color: color.textDim,
+    fontSize: font.caption,
+    lineHeight: 17,
+  },
+  error: {
+    color: color.danger,
     fontSize: font.caption,
     lineHeight: 17,
   },

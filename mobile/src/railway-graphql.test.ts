@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  isRailwayAuthorizationFailure,
   railwayGraphql,
   RailwayApiError,
 } from "./providers/railway/graphql";
@@ -77,6 +78,29 @@ describe("Railway GraphQL transport", () => {
         assert.equal(error.message.includes("do-not-leak"), false);
         return true;
       },
+    );
+  });
+
+  it("identifies expired and rejected Railway authorization", () => {
+    assert.equal(
+      isRailwayAuthorizationFailure(
+        new RailwayApiError("request rejected", { status: 401 }),
+      ),
+      true,
+    );
+    assert.equal(
+      isRailwayAuthorizationFailure(new RailwayApiError("Not Authorized")),
+      true,
+    );
+    assert.equal(
+      isRailwayAuthorizationFailure(
+        new RailwayApiError("not permitted", { code: "FORBIDDEN" }),
+      ),
+      false,
+    );
+    assert.equal(
+      isRailwayAuthorizationFailure(new Error("network request failed")),
+      false,
     );
   });
 });
