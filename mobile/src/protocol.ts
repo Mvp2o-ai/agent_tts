@@ -155,6 +155,10 @@ export function killSessionUrl(conn: Connection): string {
   return `${base}/v1/session/kill?userId=${encodeURIComponent(conn.userId)}`;
 }
 
+export function diagnosticsUrl(baseUrl: string): string {
+  return `${normalizeGatewayUrl(baseUrl)}/v1/diagnostics`;
+}
+
 /** New session = new container: the gateway exits and the platform recreates it. */
 export function resetSessionUrl(conn: Connection): string {
   const base = normalizeGatewayUrl(conn.gatewayUrl);

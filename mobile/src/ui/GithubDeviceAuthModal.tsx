@@ -13,9 +13,11 @@ import { color, font, monoFamily, radius, space } from "./theme";
 
 export function GithubDeviceAuthModal({
   authorization,
+  error,
   onCancel,
 }: {
   authorization: GithubDeviceAuthorization | null;
+  error?: string;
   onCancel: () => void;
 }) {
   if (!authorization) return null;
@@ -67,7 +69,11 @@ export function GithubDeviceAuthModal({
             onPress={openGithub}
           />
           <Button tone="ghost" label="Cancel" onPress={onCancel} />
-          <Text style={styles.waiting}>Waiting for authorization…</Text>
+          {error ? (
+            <Text style={styles.error}>{error}</Text>
+          ) : (
+            <Text style={styles.waiting}>Waiting for authorization…</Text>
+          )}
         </View>
       </View>
     </Modal>
@@ -132,5 +138,12 @@ const styles = StyleSheet.create({
     fontSize: font.caption,
     fontWeight: "700",
     textAlign: "center",
+  },
+  error: {
+    color: color.danger,
+    fontSize: font.caption,
+    fontWeight: "700",
+    textAlign: "center",
+    lineHeight: 18,
   },
 });

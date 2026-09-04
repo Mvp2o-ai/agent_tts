@@ -45,6 +45,7 @@ export function RailwayAgentScreen({
     selectedRepositories: AttachedRepository[];
     busy: boolean;
     search: string;
+    connectError?: string;
     onSearchChange: (value: string) => void;
     onRefresh: () => void;
     onToggleRepository: (repository: AttachedRepository) => void;
@@ -173,6 +174,7 @@ export function RailwayAgentScreen({
             selectedRepositories={repositorySetup.selectedRepositories}
             busy={repositorySetup.busy}
             search={repositorySetup.search}
+            connectError={repositorySetup.connectError}
             onSearchChange={repositorySetup.onSearchChange}
             onConnectGithub={repositorySetup.onConnectGithub}
             onRefresh={repositorySetup.onRefresh}

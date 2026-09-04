@@ -11,6 +11,14 @@ import {
   type RailwayProvisioningState,
 } from "./providers/railway/driver";
 import { authorizeRailwayWithBrowser } from "./providers/railway/auth-session";
+import { bindClientLogGateway } from "./diagnostics";
+import {
+  isRailwayResourceDenied,
+  isRailwaySessionExpired,
+  RAILWAY_ADMIN_GRANT_MESSAGE,
+  logRailway,
+  railwayErrorDiagnostic,
+} from "./providers/railway/graphql";
 import { RAILWAY_OAUTH_CLIENT_ID, serializeRailwayCredential } from "./providers/railway/oauth";
 import { listRailwayWorkspaces, type RailwayWorkspace } from "./providers/railway/operations";
 import {
@@ -42,6 +50,15 @@ export interface RailwayLaunchDraft {
   repositories: AttachedRepository[];
 }
 
+export type RailwayAuthorizationState =
+  | "checking"
+  | "connected"
+  | "reconnect-required"
+  | "unavailable";
+
+const RAILWAY_RECONNECT_MESSAGE =
+  "Railway authorization is no longer valid. Reconnect Railway to manage this agent.";
+
 export function useRailwayLauncher({
   setSettings,
   onReady,
@@ -63,6 +80,26 @@ export function useRailwayLauncher({
   const [launchBusy, setLaunchBusy] = useState(false);
   const [phase, setPhase] = useState<RailwayProvisioningPhase | undefined>();
   const [error, setError] = useState("");
+  const [authorizationState, setAuthorizationState] =
+    useState<RailwayAuthorizationState>("checking");
+  const [authorizationMessage, setAuthorizationMessage] = useState(
+    "Checking Railway authorization…",
+  );
+  const [lastDiagnostic, setLastDiagnostic] = useState("");
+
+  const rememberFailure = useCallback(
+    (
+      action: string,
+      cause: unknown,
+      extra: Record<string, string | undefined> = {},
+    ) => {
+      const diagnostic = railwayErrorDiagnostic(action, cause, extra);
+      setLastDiagnostic(diagnostic);
+      logRailway("action-failed", { diagnostic });
+      return diagnostic;
+    },
+    [],
+  );
 
   const loadWorkspaces = useCallback(async (id: string) => {
     const accessToken = await railwayAccessToken(id);
@@ -78,20 +115,39 @@ export function useRailwayLauncher({
         (entry) =>
           entry.kind === "provider-oauth" && entry.providerId === "railway",
       );
-      if (!active || !existing) return;
+      if (!active) return;
+      if (!existing) {
+        setAuthorizationState("reconnect-required");
+        setAuthorizationMessage(
+          "Connect Railway to manage hosted agents from this phone.",
+        );
+        return;
+      }
       setCredentialId(existing.id);
       try {
         const next = await loadWorkspaces(existing.id);
         if (!active) return;
         setWorkspaces(next);
-      } catch {
-        // Expired or revoked authorization is handled by reconnecting.
+        setAuthorizationState("connected");
+        setAuthorizationMessage("");
+      } catch (cause) {
+        if (!active) return;
+        rememberFailure("verify-account", cause);
+        if (isRailwaySessionExpired(cause)) {
+          setAuthorizationState("reconnect-required");
+          setAuthorizationMessage(RAILWAY_RECONNECT_MESSAGE);
+        } else {
+          setAuthorizationState("unavailable");
+          setAuthorizationMessage(
+            "Railway could not be reached to verify this account.",
+          );
+        }
       }
     });
     return () => {
       active = false;
     };
-  }, [loadWorkspaces]);
+  }, [loadWorkspaces, rememberFailure]);
 
   useEffect(() => {
     let active = true;
@@ -193,14 +249,14 @@ export function useRailwayLauncher({
     };
   }, [setSettings]);
 
-  const connect = useCallback(async () => {
+  const connect = useCallback(async (): Promise<RailwayWorkspace[] | null> => {
     setOauthBusy(true);
     setError("");
     try {
       const oauth = await authorizeRailwayWithBrowser(
         RAILWAY_OAUTH_CLIENT_ID,
       );
-      if (!oauth) return;
+      if (!oauth) return null;
       const entries = await credentialVault.list();
       const existing = entries.find(
         (entry) =>
@@ -213,15 +269,106 @@ export function useRailwayLauncher({
         label: "Railway account",
         secret: serializeRailwayCredential(oauth),
       });
+      const nextWorkspaces = await listRailwayWorkspaces(oauth.accessToken);
+      const records = await railwayProvisioningStore.list();
+      await Promise.all(
+        records.map((record) =>
+          railwayProvisioningStore.updateProviderCredential(
+            record.agentId,
+            entry.id,
+          ),
+        ),
+      );
+      setSettings((previous) => ({
+        ...previous,
+        agents: previous.agents.map((agent) =>
+          agent.origin?.kind === "provider" &&
+          agent.origin.providerId === "railway"
+            ? { ...agent, providerCredentialId: entry.id }
+            : agent,
+        ),
+      }));
       setCredentialId(entry.id);
-      setWorkspaces(await listRailwayWorkspaces(oauth.accessToken));
+      setWorkspaces(nextWorkspaces);
+      setAuthorizationState("connected");
+      setAuthorizationMessage("");
       onCredentialsChanged();
+      logRailway("reconnected", {
+        workspaces: nextWorkspaces.map((workspace) => workspace.id).join(","),
+      });
+      return nextWorkspaces;
     } catch (cause) {
-      setError(messageOf(cause));
+      rememberFailure("reconnect", cause);
+      const message = isRailwaySessionExpired(cause)
+        ? RAILWAY_RECONNECT_MESSAGE
+        : messageOf(cause);
+      if (isRailwaySessionExpired(cause)) {
+        setAuthorizationState("reconnect-required");
+        setAuthorizationMessage(RAILWAY_RECONNECT_MESSAGE);
+      } else {
+        setAuthorizationState("unavailable");
+        setAuthorizationMessage(message);
+      }
+      setError(message);
+      return null;
     } finally {
       setOauthBusy(false);
     }
-  }, [onCredentialsChanged]);
+  }, [onCredentialsChanged, rememberFailure, setSettings]);
+
+  const withReauth = useCallback(
+    async <T>(
+      profile: AgentProfile,
+      action: string,
+      run: () => Promise<T>,
+    ): Promise<T> => {
+      const workspaceId =
+        profile.origin?.provisioningDetails?.workspaceId ??
+        railwayStateFromOrigin(profile.origin ?? {})?.workspaceId;
+      try {
+        return await run();
+      } catch (cause) {
+        rememberFailure(action, cause, {
+          agentId: profile.id,
+          workspaceId,
+        });
+        if (
+          !isRailwaySessionExpired(cause) &&
+          !isRailwayResourceDenied(cause)
+        ) {
+          throw cause;
+        }
+        logRailway("reauth-in-flight", { action, agentId: profile.id });
+        const granted = await connect();
+        if (!granted) {
+          throw new Error("Railway reconnect cancelled.");
+        }
+        if (
+          workspaceId &&
+          !granted.some((workspace) => workspace.id === workspaceId)
+        ) {
+          const message =
+            `Railway access does not include this agent's workspace. On the Railway consent screen, grant that workspace, then retry. workspaceId=${workspaceId} granted=${granted.map((workspace) => workspace.id).join(",") || "none"}`;
+          setLastDiagnostic(message);
+          logRailway("workspace-not-granted", { diagnostic: message });
+          throw new Error(message);
+        }
+        try {
+          return await run();
+        } catch (retryCause) {
+          rememberFailure(`${action}-retry`, retryCause, {
+            agentId: profile.id,
+            workspaceId,
+          });
+          if (isRailwayResourceDenied(retryCause)) {
+            throw new Error(RAILWAY_ADMIN_GRANT_MESSAGE);
+          }
+          throw retryCause;
+        }
+      }
+    },
+    [connect, rememberFailure],
+  );
 
   const launch = useCallback(
     async (draft: RailwayLaunchDraft) => {
@@ -316,6 +463,9 @@ export function useRailwayLauncher({
               record = { ...record, state };
               record = await railwayProvisioningStore.saveLifecycle(record);
               setPhase(state.phase);
+              if (state.domain) {
+                bindClientLogGateway(`https://${state.domain}`, gatewayToken);
+              }
               setSettings((previous) => ({
                 ...previous,
                 agents: previous.agents.map((agent) =>
@@ -336,6 +486,7 @@ export function useRailwayLauncher({
         latestState = ready;
         onReady(agentId);
       } catch (cause) {
+        rememberFailure("launch", cause);
         setError(
           latestState?.lastError ??
             messageOf(cause) ??
@@ -350,6 +501,7 @@ export function useRailwayLauncher({
       credentialId,
       onCredentialsChanged,
       onReady,
+      rememberFailure,
       setSettings,
       sttProviderId,
       ttsProviderId,
@@ -370,7 +522,7 @@ export function useRailwayLauncher({
       if (!record || !state || !providerCredentialId) {
         throw new Error("Railway lifecycle metadata is incomplete.");
       }
-      const accessToken = await railwayAccessToken(providerCredentialId);
+      await bindAgentClientLogs(profile);
       const checkpoint = async (next: RailwayProvisioningState) => {
         await railwayProvisioningStore.saveLifecycle({
           ...record,
@@ -387,15 +539,18 @@ export function useRailwayLauncher({
           ),
         }));
       };
-      try {
-        return action === "stop"
-          ? await stopRailwayAgent(accessToken, state, { checkpoint })
-          : await startRailwayAgent(accessToken, state, { checkpoint });
-      } finally {
-        setPhase(undefined);
-      }
+      return withReauth(profile, action, async () => {
+        try {
+          const accessToken = await railwayAccessToken(providerCredentialId);
+          return action === "stop"
+            ? await stopRailwayAgent(accessToken, state, { checkpoint })
+            : await startRailwayAgent(accessToken, state, { checkpoint });
+        } finally {
+          setPhase(undefined);
+        }
+      });
     },
-    [setSettings],
+    [setSettings, withReauth],
   );
 
   const stopAgent = useCallback(
@@ -413,6 +568,7 @@ export function useRailwayLauncher({
       setError("");
       setLaunchBusy(true);
       try {
+        return await withReauth(profile, "replace", async () => {
         const records = await railwayProvisioningStore.list();
         const previous = records.find(
           (candidate) => candidate.agentId === profile.id,
@@ -420,6 +576,7 @@ export function useRailwayLauncher({
         if (!previous) {
           throw new Error("Railway replacement metadata is incomplete.");
         }
+        await bindAgentClientLogs(profile);
 
         const [accessToken, gatewayToken, voiceSecrets] = await Promise.all([
           railwayAccessToken(previous.providerCredentialId),
@@ -517,16 +674,18 @@ export function useRailwayLauncher({
         }
         onReady(profile.id);
         return { gatewayUrl: `https://${ready.domain}` };
+        });
       } catch (cause) {
         const message = messageOf(cause);
+        rememberFailure("replace", cause);
         setError(message);
-        throw cause;
+        throw cause instanceof Error ? cause : new Error(message);
       } finally {
         setPhase(undefined);
         setLaunchBusy(false);
       }
     },
-    [loadWorkspaces, onReady, setSettings, workspaces],
+    [loadWorkspaces, onReady, rememberFailure, setSettings, withReauth, workspaces],
   );
 
   const removeAgent = useCallback(
@@ -543,8 +702,11 @@ export function useRailwayLauncher({
       if (!state || !providerCredentialId) {
         throw new Error("Railway deletion metadata is incomplete.");
       }
-      const accessToken = await railwayAccessToken(providerCredentialId);
-      await deleteRailwayAgentProject(accessToken, state);
+      await bindAgentClientLogs(profile);
+      await withReauth(profile, "delete", async () => {
+        const accessToken = await railwayAccessToken(providerCredentialId);
+        await deleteRailwayAgentProject(accessToken, state);
+      });
       await railwayProvisioningStore.remove(profile.id);
       const gatewayCredentialId =
         profile.gatewayCredentialId ?? record?.gatewayCredentialId;
@@ -553,12 +715,15 @@ export function useRailwayLauncher({
         onCredentialsChanged();
       }
     },
-    [onCredentialsChanged],
+    [onCredentialsChanged, withReauth],
   );
 
   return {
     clientConfigured: Boolean(RAILWAY_OAUTH_CLIENT_ID),
-    oauthConnected: Boolean(credentialId),
+    oauthConnected: authorizationState === "connected",
+    authorizationState,
+    authorizationMessage,
+    lastDiagnostic,
     oauthBusy,
     workspaces,
     phase,
@@ -573,6 +738,15 @@ export function useRailwayLauncher({
     replaceAgent,
     removeAgent,
   };
+}
+
+async function bindAgentClientLogs(profile: AgentProfile): Promise<void> {
+  const token =
+    profile.token.trim() ||
+    (profile.gatewayCredentialId
+      ? ((await credentialVault.getSecret(profile.gatewayCredentialId)) ?? "")
+      : "");
+  bindClientLogGateway(profile.gatewayUrl, token);
 }
 
 function randomToken(): string {

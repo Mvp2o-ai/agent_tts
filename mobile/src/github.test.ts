@@ -166,6 +166,36 @@ describe("GitHub device flow", () => {
     assert.equal(requested, false);
   });
 
+  it("retries a backgrounded poll instead of dropping an approved device code", async () => {
+    let requests = 0;
+    let now = 0;
+    const token = await pollGithubDeviceToken(
+      "Ov23.public-client",
+      {
+        deviceCode: "device",
+        userCode: "CODE",
+        verificationUri: "https://github.com/login/device",
+        expiresIn: 60,
+        interval: 1,
+      },
+      {
+        now: () => now,
+        sleep: async (milliseconds) => {
+          now += milliseconds;
+        },
+        request: async () => {
+          requests += 1;
+          if (requests === 1) {
+            throw new TypeError("Network request failed");
+          }
+          return Response.json({ access_token: "github-token" });
+        },
+      },
+    );
+    assert.deepEqual(token, { accessToken: "github-token" });
+    assert.equal(requests, 2);
+  });
+
   it("polls immediately, then wakes early when the app becomes active", async () => {
     let requests = 0;
     let now = 0;

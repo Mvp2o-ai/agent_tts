@@ -1,4 +1,5 @@
 import type { AgentTurn, VoiceSink } from "./agent-turn.js";
+import { UtteranceAccumulator } from "./utterance-accumulator.js";
 import type { TranscriptEvent } from "./voice-providers.js";
 import { StopLatch } from "./stop-word.js";
 
@@ -11,15 +12,15 @@ export type TurnHandle = Pick<AgentTurn, "enqueue" | "abort" | "bargeIn" | "spea
  * Stop-word contract: the first matching interim or final in an utterance
  * aborts once; later interims/finals of that same utterance are ignored and
  * never enqueued. `stopped` is emitted by AgentTurn, not here.
+ *
+ * `speech_final` / `is_final` are segment boundaries, not turn boundaries.
+ * Hands-free commits on UtteranceEnd; PTT commits after CloseStream drains.
  */
 export class VoiceInput {
-  /** Stable Deepgram segments for the current conversational utterance. */
-  private finalParts: string[] = [];
-  /** Display/recovery fallback when a stream ends before any segment finalizes. */
-  private lastInterim = "";
-  private pttOpen = false;
+  private readonly utterance = new UtteranceAccumulator();
   private pttAwaitingSttEnd = false;
   private pttCommitted = false;
+  private handsfreeCommitted = false;
   private readonly stop = new StopLatch();
 
   constructor(
@@ -30,7 +31,13 @@ export class VoiceInput {
   ) {}
 
   onStt(ev: TranscriptEvent): void {
-    if (ev.speechStarted) this.turn.bargeIn();
+    if (ev.speechStarted) {
+      this.turn.bargeIn();
+      if (this.mode === "handsfree" && this.handsfreeCommitted) {
+        this.utterance.reset();
+        this.handsfreeCommitted = false;
+      }
+    }
 
     if (ev.text) {
       this.sink.sendJson({
@@ -49,35 +56,28 @@ export class VoiceInput {
         return;
       }
       if (!ev.isFinal) this.turn.bargeIn();
+      this.utterance.onTranscript(ev.text, ev.isFinal);
     } else if (ev.isFinal || ev.utteranceEnd) {
       this.stop.endUtterance();
     }
 
-    if (ev.text) {
-      if (ev.isFinal) {
-        // `isFinal` stabilizes one segment, not the whole utterance. Deepgram
-        // may emit several final segments during one PTT press or spoken turn.
-        this.finalParts.push(ev.text.trim());
-        this.lastInterim = "";
-      } else {
-        this.lastInterim = ev.text.trim();
-      }
-    }
-
-    if (ev.utteranceEnd && this.mode === "handsfree" && this.hasUtterance()) {
+    if (
+      ev.utteranceEnd
+      && this.mode === "handsfree"
+      && !this.handsfreeCommitted
+      && this.utterance.hasContent()
+    ) {
       this.commit();
     }
   }
 
   pttStart(): void {
-    this.pttOpen = true;
     this.pttAwaitingSttEnd = false;
     this.pttCommitted = false;
-    this.clearUtterance();
+    this.utterance.reset();
   }
 
   pttEnd(): void {
-    this.pttOpen = false;
     this.pttAwaitingSttEnd = true;
   }
 
@@ -85,7 +85,7 @@ export class VoiceInput {
   sttEnd(): void {
     if (!this.pttAwaitingSttEnd || this.pttCommitted) return;
     this.pttAwaitingSttEnd = false;
-    if (this.hasUtterance()) this.commit();
+    if (this.utterance.hasContent()) this.commit();
   }
 
   userAbort(): void {
@@ -94,28 +94,18 @@ export class VoiceInput {
   }
 
   private discardUtterance(): void {
-    this.clearUtterance();
+    this.utterance.reset();
     this.pttAwaitingSttEnd = false;
     this.pttCommitted = true;
+    this.handsfreeCommitted = false;
   }
 
   private commit(): void {
-    const text = (
-      this.finalParts.join(" ").trim() || this.lastInterim
-    ).trim();
-    this.clearUtterance();
+    const text = this.utterance.take();
     this.pttAwaitingSttEnd = false;
     this.pttCommitted = true;
+    this.handsfreeCommitted = true;
     if (!text) return;
     this.turn.enqueue(text);
-  }
-
-  private hasUtterance(): boolean {
-    return this.finalParts.length > 0 || this.lastInterim.length > 0;
-  }
-
-  private clearUtterance(): void {
-    this.finalParts = [];
-    this.lastInterim = "";
   }
 }

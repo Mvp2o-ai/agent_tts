@@ -204,6 +204,28 @@ Watch the deployment: Railway must start a new container (Always restart),
 
 `railway ssh` + `id` should show user `agent`, not `root`.
 
+## Read agent and phone-client logs
+
+The gateway writes everything to stdout, and Railway's log store keeps that
+stream across container restarts:
+
+```bash
+railway logs --service <your-service> --since 1h
+```
+
+This includes the phone's own error reports. The app fire-and-forgets its
+provider and auth failures (for example a Railway `Not Authorized` on delete)
+to `POST /v1/diagnostics` on its paired gateway, which prints each one as a
+single JSON line with `"src":"client"`. Rejected requests appear as
+`"event":"unauthorized"` lines. Filter for them:
+
+```bash
+railway logs --service <your-service> --since 1h --filter '"src":"client"'
+```
+
+Container gone entirely? Logs are per deployment — pass an older deployment ID
+to `railway logs` to read a previous container's stream.
+
 ## Two agents
 
 Two Railway services (or two projects), each with its own volume, token, and

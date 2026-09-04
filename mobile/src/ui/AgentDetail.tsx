@@ -7,6 +7,7 @@ import {
 } from "react-native";
 import type { ReactNode } from "react";
 import { useState } from "react";
+import type { ProviderAccountConnection } from "../providers/types";
 import { NEW_SESSION_WARNING } from "../session-refresh";
 import {
   Button,
@@ -28,6 +29,7 @@ export function AgentDetailScreen({
   gone,
   lifecycleBusy,
   removing,
+  accountConnection,
   configuration,
   onNameChange,
   onGatewayUrlChange,
@@ -46,6 +48,7 @@ export function AgentDetailScreen({
   gone?: boolean;
   lifecycleBusy?: boolean;
   removing?: boolean;
+  accountConnection?: ProviderAccountConnection;
   configuration?: ReactNode;
   onNameChange: (value: string) => void;
   onGatewayUrlChange: (value: string) => void;
@@ -119,6 +122,48 @@ export function AgentDetailScreen({
         style={styles.scroll}
         contentContainerStyle={styles.content}
       >
+        {accountConnection && accountConnection.status !== "connected" ? (
+          <Card style={styles.lifecycleCard}>
+            <Text style={styles.lifecycleTitle}>
+              {accountConnection.status === "checking"
+                ? `Checking ${hostLabel} authorization`
+                : accountConnection.status === "reconnect-required"
+                  ? `${hostLabel} disconnected`
+                  : `${hostLabel} connection unavailable`}
+            </Text>
+            <Text style={styles.lifecycleDetail}>
+              {accountConnection.message ||
+                `Reconnect ${hostLabel} to manage this agent.`}
+            </Text>
+            {accountConnection.diagnostic ? (
+              <Text selectable style={styles.diagnostic}>
+                {accountConnection.diagnostic}
+              </Text>
+            ) : null}
+            {accountConnection.status !== "checking" ? (
+              <Button
+                label={`Reconnect ${hostLabel}`}
+                tone="primary"
+                busy={accountConnection.busy}
+                onPress={accountConnection.reconnect}
+              />
+            ) : null}
+          </Card>
+        ) : null}
+        {accountConnection?.diagnostic &&
+        accountConnection.status === "connected" ? (
+          <Card style={styles.lifecycleCard}>
+            <Text style={styles.lifecycleTitle}>Last Railway error</Text>
+            <Text selectable style={styles.diagnostic}>
+              {accountConnection.diagnostic}
+            </Text>
+            <Button
+              label={`Reconnect ${hostLabel}`}
+              busy={accountConnection.busy}
+              onPress={accountConnection.reconnect}
+            />
+          </Card>
+        ) : null}
         {gone ? (
           <Card style={styles.lifecycleCard}>
             <Text style={styles.lifecycleTitle}>Deployment removed</Text>
@@ -437,6 +482,12 @@ const styles = StyleSheet.create({
     color: color.textDim,
     fontSize: font.caption,
     lineHeight: 18,
+  },
+  diagnostic: {
+    color: color.textMuted,
+    fontSize: font.micro,
+    lineHeight: 16,
+    fontVariant: ["tabular-nums"],
   },
   newSession: {
     minHeight: 44,

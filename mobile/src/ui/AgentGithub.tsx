@@ -16,6 +16,7 @@ export function AgentGithubSummary({
   repositories,
   authState,
   authMessage,
+  connectError,
   busy,
   onConnect,
   onManage,
@@ -25,6 +26,7 @@ export function AgentGithubSummary({
   repositories: AttachedRepository[];
   authState: GitAuthState;
   authMessage: string;
+  connectError?: string;
   busy?: boolean;
   onConnect: () => void;
   onManage: () => void;
@@ -54,11 +56,13 @@ export function AgentGithubSummary({
                 : "GitHub is not connected"}
           </Text>
           <Text style={styles.statusDetail}>
-            {needsReconnect
-              ? authMessage.trim() || "The saved GitHub credential is unavailable."
-              : connected
-                ? "Available to git and gh in this agent’s live session."
-                : "Connect one GitHub identity to this agent."}
+            {connectError?.trim()
+              ? connectError.trim()
+              : needsReconnect
+                ? authMessage.trim() || "The saved GitHub credential is unavailable."
+                : connected
+                  ? "Available to git and gh in this agent’s live session."
+                  : "Connect one GitHub identity to this agent."}
           </Text>
         </View>
       </View>
@@ -118,6 +122,7 @@ export function GithubRepositoryManagerScreen({
   selectedRepositories,
   busy,
   search,
+  connectError,
   onSearchChange,
   onConnect,
   onRefresh,
@@ -132,6 +137,7 @@ export function GithubRepositoryManagerScreen({
   selectedRepositories: AttachedRepository[];
   busy?: boolean;
   search: string;
+  connectError?: string;
   onSearchChange: (value: string) => void;
   onConnect: () => void;
   onRefresh: () => void;
@@ -154,6 +160,7 @@ export function GithubRepositoryManagerScreen({
         selectedRepositories={selectedRepositories}
         busy={busy}
         search={search}
+        connectError={connectError}
         onSearchChange={onSearchChange}
         onConnectGithub={onConnect}
         onRefresh={onRefresh}

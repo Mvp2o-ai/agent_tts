@@ -63,6 +63,7 @@ export interface ProviderSetupContext {
     repositoryCredentialId?: string;
     busy: boolean;
     search: string;
+    connectError?: string;
     onSearchChange: (value: string) => void;
     onRefresh: () => Promise<AttachedRepository[]>;
     /**
@@ -77,11 +78,20 @@ export interface ProviderSetupContext {
   onReady: (providerId: string, agentId: string) => void;
 }
 
+export interface ProviderAccountConnection {
+  status: "checking" | "connected" | "reconnect-required" | "unavailable";
+  message?: string;
+  diagnostic?: string;
+  busy?: boolean;
+  reconnect: () => void;
+}
+
 export interface ProviderPlugin {
   definition: ProviderDefinition;
   prepareSetup(): void;
   renderSetup(onBack: () => void): ReactNode;
   hostLabel(profile: AgentProfile): string;
+  accountConnection(profile: AgentProfile): ProviderAccountConnection;
   startAgent(profile: AgentProfile): Promise<void>;
   stopAgent(profile: AgentProfile): Promise<void>;
   replaceAgent?(profile: AgentProfile): Promise<{ gatewayUrl: string }>;

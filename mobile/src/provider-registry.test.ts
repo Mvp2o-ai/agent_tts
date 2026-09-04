@@ -104,6 +104,12 @@ function provider(id: string): ProviderPlugin {
     hostLabel() {
       return id;
     },
+    accountConnection() {
+      return {
+        status: "connected",
+        reconnect() {},
+      };
+    },
     async startAgent() {},
     async stopAgent() {},
     async deleteAgent() {},

@@ -116,6 +116,19 @@ describe("VoiceInput", () => {
     assert.deepEqual(turn.enqueued, ["test access to my Gmail"]);
   });
 
+  it("enqueues the covering interim when finals are only the last slice", () => {
+    const { turn, input } = setup();
+    input.onStt({
+      text: "check the logs when the containers start",
+      isFinal: false,
+    });
+    input.onStt({ text: "when the containers start", isFinal: true });
+    input.onStt({ text: "", isFinal: true, utteranceEnd: true });
+    assert.deepEqual(turn.enqueued, [
+      "check the logs when the containers start",
+    ]);
+  });
+
   it("barge-in from speech does not abort the turn", () => {
     const { turn, input } = setup();
     turn.speaking = true;
