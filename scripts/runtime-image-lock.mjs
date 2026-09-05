@@ -130,16 +130,25 @@ async function verifySourceCommit(lock) {
 }
 
 async function verifyImageRevision(lock) {
-  const match = /^([^/]+)\/([^@]+)@(sha256:[a-f0-9]{64})$/.exec(lock.image);
-  if (!match) {
-    throw new Error("runtime image lock must include an OCI registry hostname");
+  const releaseRepository = (
+    process.env.RUNTIME_IMAGE_REPOSITORY ??
+    process.env.GITHUB_REPOSITORY ??
+    "Mvp2o-ai/agent_tts"
+  ).toLowerCase();
+  const expectedPrefix = `ghcr.io/${releaseRepository}@`;
+  if (!lock.image.startsWith(expectedPrefix)) {
+    throw new Error(
+      `runtime image lock must use the release repository ${expectedPrefix}sha256:...`,
+    );
   }
-  const [, configuredRegistry, repository, digest] = match;
-  const registry =
-    configuredRegistry === "docker.io"
-      ? "registry-1.docker.io"
-      : configuredRegistry;
-  const base = `https://${registry}/v2/${repository}`;
+  const match = /^ghcr\.io\/[a-z0-9][a-z0-9._/-]*@(sha256:[a-f0-9]{64})$/.exec(
+    lock.image,
+  );
+  if (!match) {
+    throw new Error("runtime image lock must contain a valid GHCR digest");
+  }
+  const [, digest] = match;
+  const base = `https://ghcr.io/v2/${releaseRepository}`;
   const headers = {
     Accept: [
       "application/vnd.oci.image.index.v1+json",
@@ -150,18 +159,12 @@ async function verifyImageRevision(lock) {
   };
   let indexResponse = await fetch(`${base}/manifests/${digest}`, { headers });
   if (indexResponse.status === 401) {
-    const challenge = indexResponse.headers.get("www-authenticate") ?? "";
-    const realm = /realm="([^"]+)"/.exec(challenge)?.[1];
-    const service = /service="([^"]+)"/.exec(challenge)?.[1];
-    const scope =
-      /scope="([^"]+)"/.exec(challenge)?.[1] ??
-      `repository:${repository}:pull`;
-    if (!realm) {
-      throw new Error("public OCI registry did not provide bearer authentication");
-    }
-    const tokenUrl = new URL(realm);
-    if (service) tokenUrl.searchParams.set("service", service);
-    tokenUrl.searchParams.set("scope", scope);
+    const tokenUrl = new URL("https://ghcr.io/token");
+    tokenUrl.searchParams.set("service", "ghcr.io");
+    tokenUrl.searchParams.set(
+      "scope",
+      `repository:${releaseRepository}:pull`,
+    );
     const tokenResponse = await fetch(tokenUrl);
     if (!tokenResponse.ok) {
       throw new Error(
