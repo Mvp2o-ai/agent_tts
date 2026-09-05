@@ -20,7 +20,7 @@
     "eas:device:android": "bash scripts/eas-build-guarded.sh development android"
   },
   "dependencies": {
-    "@react-native-async-storage/async-storage": "2.2.0",
+    "@react-native-async-storage/async-storage": "3.1.1",
     "babel-preset-expo": "~57.0.0",
     "expo": "~57.0.17",
     "expo-asset": "~57.0.15",
