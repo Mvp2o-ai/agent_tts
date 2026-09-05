@@ -268,6 +268,11 @@ For voice-path changes:
 5. Treat simulator success as UI/protocol validation only. Headphones,
    microphone routing, echo cancellation, background behavior, and barge-in
    feel require a physical device.
+6. Do not treat an operator Railway canary as a phone test. In-app launched
+   agents run the published GHCR image in their own provider project. The ops
+   `railway-deploy.sh` host is not a tile on the phone. Gateway changes the
+   user must feel on device are not testable there until that image is what
+   those agents run.
 
 When debugging a reported mobile UI symptom:
 
