@@ -1,3 +1,5 @@
+import runtimeImageLock from "../../runtime-image.lock.json";
+
 declare const process: {
   env: {
     EXPO_PUBLIC_AGENT_RUNTIME_IMAGE?: string;
@@ -9,7 +11,7 @@ declare const process: {
  * mobile build time without changing any provider driver.
  */
 export const DEFAULT_AGENT_RUNTIME_IMAGE =
-  "ghcr.io/mvp2o-ai/agent_tts@sha256:1652d50f5641031a833df18d8695d5b08d80ba57f3234954d061deb837b2720d";
+  runtimeImageLock.image;
 
 export const AGENT_RUNTIME_IMAGE = runtimeImageFromEnvironment(process.env);
 

@@ -3,6 +3,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="$(cd "$ROOT/.." && pwd)"
 cd "$ROOT"
 
 usage() {
@@ -27,6 +28,9 @@ if [[ "$PLATFORM" != "ios" && "$PLATFORM" != "android" ]]; then
   usage
   exit 2
 fi
+
+# A phone artifact must never embed a runtime digest older than its source.
+node "$REPO_ROOT/scripts/runtime-image-lock.mjs" check
 
 if [[ ! -f node_modules/expo/package.json ]]; then
   echo "Installing mobile dependencies…" >&2

@@ -93,6 +93,11 @@ prints the install page. See
 [`docs/mobile-distribution.md`](../docs/mobile-distribution.md) for prerequisites,
 cost boundaries, public build variables, and repeat builds.
 
+Every EAS build is gated by `runtime-image.lock.json`. The official wrappers
+also verify its runtime-source fingerprint, publishing commit, public GHCR
+digest, and OCI revision labels before submission. A pending runtime publish
+cannot produce a phone artifact.
+
 | Profile | Purpose |
 |---|---|
 | `development-simulator` | iOS Simulator `.app` with expo-dev-client |

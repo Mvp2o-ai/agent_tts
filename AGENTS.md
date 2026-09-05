@@ -320,6 +320,12 @@ When debugging a reported mobile UI symptom:
  registry credentials from an operator instance. Release deployments should
  use an immutable digest or immutable version reference; mutable branch tags
  are development conveniences only.
+- The committed mobile runtime lock is a release state machine. Runtime build
+ inputs may change only with the lock marked `pending`. A mobile artifact may
+ be built only with a `ready` lock whose source fingerprint, publishing commit,
+ public image digest, and OCI revision labels all agree. Runtime publication
+ and the reviewed ready-lock update are separate gates; never reuse or submit
+ an EAS artifact between them.
 - Operator repositories and live provider projects are consumers of this
  public product. They may pin an image and hold instance IDs, domains, secrets,
  and deployment scripts, but they are never a dependency, credential source,

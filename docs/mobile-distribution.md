@@ -73,6 +73,13 @@ and EAS-managed credentials:
 npm run mobile:install
 ```
 
+Before submission, the installer verifies `mobile/runtime-image.lock.json`
+against every runtime build input and the public GHCR manifests. EAS repeats a
+lock-state check before installing dependencies. If runtime source has changed,
+the build remains blocked until CI publishes it and a reviewed follow-up pins
+the resulting immutable digest. Do not bypass this release contract with a
+direct EAS invocation.
+
 Platform-specific commands are also available from `mobile/`:
 
 ```bash

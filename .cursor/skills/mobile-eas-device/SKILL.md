@@ -22,7 +22,17 @@ Simulator / Metro / localhost are not this skill — just run Expo against
 **Say:** leave/close Mac, no Metro, standalone, preview, Safari install, vague
 “give me a link” / “URL” / “phone link”
 
-First inspect the latest `preview` build’s `gitCommitHash`. Reuse it only when
+First run this from the repository root:
+
+```bash
+node scripts/runtime-image-lock.mjs check
+```
+
+Stop if it fails. Never submit or reuse a mobile artifact while the runtime
+lock is pending, stale, not publicly pullable, or does not match its recorded
+publishing commit.
+
+Then inspect the latest `preview` build’s `gitCommitHash`. Reuse it only when
 there are no changes under `mobile/` between that commit and the requested
 release commit. A finished build is not necessarily the current build.
 
@@ -57,6 +67,8 @@ bash scripts/print-dev-link.sh ios development
   the newest build returned by EAS.
 - This project has no OTA delivery. Rebuild preview for mobile JavaScript
   changes as well as native changes.
+- The official local wrappers and EAS remote pre-install hook both reject a
+  pending runtime lock. Never bypass either guard with a direct EAS command.
 - Submit with `--no-wait`; return the build-page URL immediately. Do not wait
   on GitHub CI, Dependabot, or unrelated PRs.
 - Do not give a development build when they want to leave the Mac.
