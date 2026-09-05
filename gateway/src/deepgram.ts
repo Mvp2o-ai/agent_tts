@@ -31,7 +31,7 @@ export interface SttTransport {
  * Hands-free treats UtteranceEnd as "you are done talking", so this is really
  * a thinking-pause budget: too low and a mid-sentence pause ships a fragment.
  * Deepgram rejects values below 1000; cap at 5000 so a typo cannot strand a
- * turn for a minute. VoiceInput's continuation window covers the overshoot.
+ * turn for a minute.
  */
 export const DEFAULT_UTTERANCE_END_MS = 2500;
 export const MIN_UTTERANCE_END_MS = 1000;
