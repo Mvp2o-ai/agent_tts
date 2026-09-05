@@ -19,6 +19,15 @@ container to Railway or any other provider.
 - Only touch an operator instance if the user explicitly names that instance
   or provider and asks to deploy it.
 
+## Phone tests
+
+Operator canary (`agent_tts-ops/scripts/railway-deploy.sh`) is **not** a
+phone test. It deploys the ops `agent` service. The app’s agent tiles are
+separate Railway projects on the published GHCR image. Never send the user
+to the phone after a canary. Gateway changes they must feel on device go
+through this release flow until those tiles run the new digest; then one
+new session on an existing agent.
+
 ## Artifacts
 
 - Runtime changes publish the BYOC container image to GHCR from `main`.

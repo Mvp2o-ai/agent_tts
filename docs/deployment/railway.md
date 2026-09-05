@@ -206,7 +206,11 @@ Watch the deployment: Railway must start a new container (Always restart),
 
 ## Read agent and phone-client logs
 
-The gateway writes everything to stdout, and Railway's log store keeps that
+Use the Railway project for **that phone agent** (in-app launch: service
+`agent-runtime` on `agent-tts-<id>`). Do not read the operator `agent`
+service in the private ops project and treat it as the phone.
+
+The gateway writes to stdout/stderr, and Railway's log store keeps that
 stream across container restarts:
 
 ```bash

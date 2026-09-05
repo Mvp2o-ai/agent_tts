@@ -34,12 +34,18 @@ export class VoiceInput {
     if (ev.speechStarted) {
       this.turn.bargeIn();
       if (this.mode === "handsfree" && this.handsfreeCommitted) {
+        sttLog({ event: "utterance_reset", reason: "speech_started" });
         this.utterance.reset();
         this.handsfreeCommitted = false;
       }
     }
 
     if (ev.text) {
+      sttLog({
+        event: "transcript",
+        isFinal: ev.isFinal,
+        text: ev.text,
+      });
       this.sink.sendJson({
         type: "transcript",
         text: ev.text,
@@ -72,20 +78,31 @@ export class VoiceInput {
   }
 
   pttStart(): void {
+    sttLog({ event: "ptt_start" });
     this.pttAwaitingSttEnd = false;
     this.pttCommitted = false;
     this.utterance.reset();
   }
 
   pttEnd(): void {
+    sttLog({ event: "ptt_end" });
     this.pttAwaitingSttEnd = true;
   }
 
   /** Called after the STT stream flushes all late final segments and closes. */
   sttEnd(): void {
-    if (!this.pttAwaitingSttEnd || this.pttCommitted) return;
+    if (!this.pttAwaitingSttEnd || this.pttCommitted) {
+      sttLog({
+        event: "stt_end",
+        committed: false,
+        awaiting: this.pttAwaitingSttEnd,
+        alreadyCommitted: this.pttCommitted,
+      });
+      return;
+    }
     this.pttAwaitingSttEnd = false;
     if (this.utterance.hasContent()) this.commit();
+    else sttLog({ event: "stt_end", committed: false, reason: "empty" });
   }
 
   userAbort(): void {
@@ -94,6 +111,7 @@ export class VoiceInput {
   }
 
   private discardUtterance(): void {
+    sttLog({ event: "utterance_reset", reason: "discard" });
     this.utterance.reset();
     this.pttAwaitingSttEnd = false;
     this.pttCommitted = true;
@@ -105,7 +123,12 @@ export class VoiceInput {
     this.pttAwaitingSttEnd = false;
     this.pttCommitted = true;
     this.handsfreeCommitted = true;
+    sttLog({ event: "commit", text });
     if (!text) return;
     this.turn.enqueue(text);
   }
+}
+
+function sttLog(fields: Record<string, unknown>): void {
+  process.stderr.write(`${JSON.stringify({ src: "stt", ...fields })}\n`);
 }
