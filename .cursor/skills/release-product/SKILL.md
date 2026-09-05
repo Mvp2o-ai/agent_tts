@@ -35,9 +35,17 @@ container to Railway or any other provider.
 3. Commit and push a focused branch.
 4. Open or update its PR.
 5. Merge when its applicable checks pass.
-6. For runtime/image changes, verify the `Publish runtime image` job on the
-   resulting `main` run. Do not substitute a provider deployment.
-7. For mobile changes, or whenever the user asks for a standalone phone
+6. A runtime-changing PR must commit
+   `node scripts/runtime-image-lock.mjs mark-pending`; CI rejects a ready lock
+   after runtime inputs change.
+7. For runtime/image changes, verify the `Publish runtime image` job on the
+   resulting `main` run. Run the exact `mark-ready` command printed in its
+   summary, open the separate runtime-lock PR, and merge it through CI.
+8. Do not submit or reuse a mobile artifact until
+   `node scripts/runtime-image-lock.mjs check` succeeds. This validates the
+   runtime fingerprint, publishing commit, public GHCR digest, and OCI
+   revision labels.
+9. For mobile changes, or whenever the user asks for a standalone phone
    artifact, follow the `mobile-eas-device` skill and return the EAS build-page
    URL.
 
@@ -56,6 +64,8 @@ check. The user decides whether protection policy itself should change.
   build, and install status.
 - Report runtime publication and EAS submission separately.
 - A release is not blocked merely because unrelated Dependabot checks failed.
+- A pending or stale runtime image lock is always release-blocking. Never
+  bypass the local build guard or EAS pre-install hook.
 
 ## Handoff
 

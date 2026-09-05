@@ -14,9 +14,10 @@
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test src/*.test.ts",
     "config:check": "expo config --type public",
+    "eas-build-pre-install": "node scripts/assert-runtime-image-ready.mjs",
     "install:device": "bash scripts/eas-device-install.sh",
-    "eas:device:ios": "npx eas-cli build --profile development --platform ios",
-    "eas:device:android": "npx eas-cli build --profile development --platform android"
+    "eas:device:ios": "bash scripts/eas-build-guarded.sh development ios",
+    "eas:device:android": "bash scripts/eas-build-guarded.sh development android"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "2.2.0",
