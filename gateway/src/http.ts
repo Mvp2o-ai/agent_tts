@@ -468,17 +468,39 @@ async function handleVoice(
   }
   ws.off("message", forwardGitAuthDuringProvisioning);
 
-  const attachStt = () => {
+  /**
+   * PTT used to open a fresh STT socket on every press, so every turn paid a
+   * TLS + WebSocket handshake before audio could flow. Speech spoken during
+   * that window lands in the pre-open ring, which evicts oldest-first, so a
+   * slow handshake silently ate the start of the sentence — pressing earlier
+   * could not help, because the ring keeps the most recent audio, not the
+   * first. Keep a socket warm instead: open one on attach and re-open as soon
+   * as the previous press has flushed. Each PTT turn still ends with
+   * CloseStream, so late finals are unaffected.
+   */
+  function attachStt(): void {
     attachment.stt?.close();
     attachment.stt = sttAdapter.open({
       onError: (err) =>
         session.sink.sendJson({ type: "error", message: err.message }),
       onEvent: (ev) => input.onStt(ev),
-      onEnd: () => input.sttEnd(),
+      onEnd: () => {
+        input.sttEnd();
+        if (mode === "ptt") rewarmStt();
+      },
     });
-  };
+  }
 
-  if (mode === "handsfree" && focused) attachStt();
+  /** Never steals a stream a fresh press already opened. */
+  function rewarmStt(): void {
+    if (session.attachment !== attachment) return;
+    if (!attachment.focused) return;
+    if (attachment.stt) return;
+    if (ws.readyState !== WebSocket.OPEN) return;
+    attachStt();
+  }
+
+  if (focused) attachStt();
 
   ws.send(
     JSON.stringify({
@@ -524,18 +546,23 @@ async function handleVoice(
       if (!msg.focused) {
         attachment.stt?.close();
         attachment.stt = undefined;
-      } else if (mode === "handsfree") {
+      } else {
         attachStt();
       }
     }
     if (msg.type === "ptt_start" && attachment.focused) {
       input.pttStart();
-      attachStt();
+      if (!attachment.stt) attachStt();
     }
     if (msg.type === "ptt_end") {
       input.pttEnd();
+      // Detach before flushing: onEnd can fire synchronously, and rewarmStt
+      // must not see the draining stream still attached or it will skip the
+      // re-warm. Also stops PCM routing into a stream that is closing.
+      const draining = attachment.stt;
+      attachment.stt = undefined;
       // CloseStream so STT flushes a late final; VoiceInput commits once.
-      attachment.stt?.finish();
+      draining?.finish();
     }
     if (msg.type === "abort") input.userAbort();
     if (msg.type === "git_auth") {

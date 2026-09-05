@@ -2,6 +2,7 @@ import WebSocket from "ws";
 import type { SttStream, TranscriptEvent } from "./voice-providers.js";
 import {
   STT_PREOPEN_BYTES,
+  STT_PREOPEN_MS,
   STT_SAMPLE_RATE,
 } from "./voice-providers.js";
 
@@ -74,6 +75,7 @@ export function attachStreamingStt(
   let closed = false;
   let finishRequested = false;
   let endNotified = false;
+  let evictionWarned = false;
   let keepalive: ReturnType<typeof setInterval> | undefined;
 
   const notifyEnd = () => {
@@ -86,6 +88,16 @@ export function attachStreamingStt(
     if (chunk.length === 0) return;
     pending.push(chunk);
     pendingBytes += chunk.length;
+    if (pendingBytes > STT_PREOPEN_BYTES && !evictionWarned) {
+      // Silent truncation is why this went unnoticed: the speaker loses the
+      // start of a sentence and nothing anywhere says so.
+      evictionWarned = true;
+      console.warn(
+        `[stt] pre-open buffer full (${STT_PREOPEN_MS}ms) — dropping the `
+        + "oldest audio; the start of this utterance may be lost. The STT "
+        + "socket is taking too long to open.",
+      );
+    }
     while (pendingBytes > STT_PREOPEN_BYTES && pending.length > 0) {
       const extra = pendingBytes - STT_PREOPEN_BYTES;
       const head = pending[0];
