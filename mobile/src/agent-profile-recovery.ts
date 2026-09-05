@@ -22,5 +22,8 @@ export function mergeRecoveredAgentProfile(
   if (gitCredentialId) merged.gitCredentialId = gitCredentialId;
   else delete merged.gitCredentialId;
   if (gitCredentialState) merged.gitCredentialState = gitCredentialState;
+  if (current.repositories === undefined && recovered.repositories) {
+    merged.repositories = recovered.repositories;
+  }
   return merged;
 }

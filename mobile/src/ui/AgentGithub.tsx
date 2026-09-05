@@ -150,7 +150,7 @@ export function GithubRepositoryManagerScreen({
     <SetupShell
       eyebrow="AGENT"
       title="Startup repositories"
-      subtitle="This agent has one GitHub identity. Access updates the live session immediately; checked repositories are cloned when its next container session starts."
+      subtitle="This agent has one GitHub identity. Access updates the live session immediately; the checked startup list is saved and cloned at the start of every new container session."
       onBack={onBack}
     >
       <GithubRepositoryPicker

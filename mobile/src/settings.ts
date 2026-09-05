@@ -254,16 +254,17 @@ function parseAgentProfile(value: unknown): AgentProfile | null {
 function parseRepository(value: unknown): AttachedRepository | null {
   if (!value || typeof value !== "object") return null;
   const repo = value as Record<string, unknown>;
+  const id = Number(repo.id);
   if (
-    !Number.isSafeInteger(repo.id) ||
-    Number(repo.id) <= 0 ||
+    !Number.isSafeInteger(id) ||
+    id <= 0 ||
     typeof repo.fullName !== "string" ||
     typeof repo.cloneUrl !== "string"
   ) {
     return null;
   }
   return {
-    id: Number(repo.id),
+    id,
     fullName: repo.fullName,
     cloneUrl: repo.cloneUrl,
     ...(typeof repo.defaultBranch === "string"

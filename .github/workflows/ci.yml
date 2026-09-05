@@ -102,6 +102,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       image: ${{ steps.filter.outputs.image }}
+      runtime: ${{ steps.filter.outputs.runtime }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -119,19 +120,52 @@ jobs:
           MANUAL_PUBLISH: ${{ inputs.publish_image || false }}
         run: |
           image=false
+          runtime=false
           if [[ "$MANUAL_PUBLISH" == "true" || "$REF" == refs/tags/v* ]]; then
             image=true
           elif [[ "$EVENT_NAME" == "pull_request" ]]; then
             git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- \
               agentbox gateway package.json package-lock.json \
               .dockerignore .github/workflows/ci.yml || image=true
+            git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- \
+              agentbox gateway package.json package-lock.json \
+              .dockerignore || runtime=true
           elif [[ -n "$BEFORE_SHA" &&
                   "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ]]; then
             git diff --quiet "$BEFORE_SHA" "$PUSH_SHA" -- \
               agentbox gateway package.json package-lock.json \
               .dockerignore .github/workflows/ci.yml || image=true
+            git diff --quiet "$BEFORE_SHA" "$PUSH_SHA" -- \
+              agentbox gateway package.json package-lock.json \
+              .dockerignore || runtime=true
           fi
           echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "runtime=$runtime" >> "$GITHUB_OUTPUT"
+
+  runtime_lock:
+    name: Runtime release contract
+    needs: changes
+    if: always() && needs.changes.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Enforce runtime image lock state
+        env:
+          RUNTIME_CHANGED: ${{ needs.changes.outputs.runtime }}
+          MANUAL_PUBLISH: ${{ inputs.publish_image || false }}
+        run: |
+          if [[ "$RUNTIME_CHANGED" == "true" ]]; then
+            node scripts/runtime-image-lock.mjs require-pending
+          elif [[ "$MANUAL_PUBLISH" == "true" ]]; then
+            node scripts/runtime-image-lock.mjs require-pending ||
+              node scripts/runtime-image-lock.mjs check
+          else
+            node scripts/runtime-image-lock.mjs check
+          fi
 
   image:
     name: Runtime image
@@ -183,7 +217,7 @@ jobs:
   ci:
     name: All checks
     if: always()
-    needs: [runtime, mobile, android, changes, image]
+    needs: [runtime, mobile, android, changes, runtime_lock, image]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -193,6 +227,7 @@ jobs:
           MOBILE_RESULT: ${{ needs.mobile.result }}
           ANDROID_RESULT: ${{ needs.android.result }}
           CHANGES_RESULT: ${{ needs.changes.result }}
+          RUNTIME_LOCK_RESULT: ${{ needs.runtime_lock.result }}
           IMAGE_RESULT: ${{ needs.image.result }}
         run: |
           set -euo pipefail
@@ -200,15 +235,17 @@ jobs:
           test "$MOBILE_RESULT" = "success"
           test "$ANDROID_RESULT" = "success"
           test "$CHANGES_RESULT" = "success"
+          test "$RUNTIME_LOCK_RESULT" = "success"
           [[ "$IMAGE_RESULT" == "success" || "$IMAGE_RESULT" == "skipped" ]]
 
   publish:
     name: Publish runtime image
-    needs: [runtime, changes]
+    needs: [runtime, changes, runtime_lock]
     if: >-
       always() &&
       needs.runtime.result == 'success' &&
       needs.changes.result == 'success' &&
+      needs.runtime_lock.result == 'success' &&
       ((github.event_name == 'push' &&
         needs.changes.outputs.image == 'true') ||
        (github.event_name == 'workflow_dispatch' &&
@@ -261,6 +298,10 @@ jobs:
         env:
           IMAGE_NAME: ${{ steps.image-name.outputs.name }}
           IMAGE_DIGEST: ${{ steps.publish-image.outputs.digest }}
+          SOURCE_COMMIT: ${{ github.sha }}
         run: |
           echo "### Runtime image" >> "$GITHUB_STEP_SUMMARY"
           echo "\`$IMAGE_NAME@$IMAGE_DIGEST\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Pin this exact runtime before any mobile build:" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`node scripts/runtime-image-lock.mjs mark-ready '$IMAGE_NAME@$IMAGE_DIGEST' '$SOURCE_COMMIT'\`" >> "$GITHUB_STEP_SUMMARY"

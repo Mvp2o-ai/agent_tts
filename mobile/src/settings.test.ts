@@ -96,6 +96,35 @@ describe("device settings", () => {
     );
   });
 
+  it("hydrates startup repository ids stored as decimal strings", () => {
+    const parsed = parseDeviceSettings(
+      JSON.stringify({
+        agents: [
+          {
+            id: "agent-1",
+            name: "Agent 1",
+            gatewayUrl: "http://example",
+            token: "token",
+            repositories: [
+              {
+                id: "42",
+                fullName: "acme/api",
+                cloneUrl: "https://github.com/acme/api.git",
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    assert.deepEqual(activeAgent(parsed).repositories, [
+      {
+        id: 42,
+        fullName: "acme/api",
+        cloneUrl: "https://github.com/acme/api.git",
+      },
+    ]);
+  });
+
   it("persists desired lifecycle state and defaults legacy profiles to running", () => {
     const stopped = {
       ...DEFAULT_DEVICE_SETTINGS,

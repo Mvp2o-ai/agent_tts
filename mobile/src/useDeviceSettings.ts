@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AppState } from "react-native";
 import {
   createSettingsStore,
   DEFAULT_DEVICE_SETTINGS,
@@ -18,6 +19,7 @@ export function useDeviceSettings(
     next: DeviceSettings | ((prev: DeviceSettings) => DeviceSettings),
   ) => void;
   getSettings: () => DeviceSettings;
+  flushSettings: () => Promise<void>;
 } {
   const [settings, setSettingsState] = useState<DeviceSettings>(
     DEFAULT_DEVICE_SETTINGS,
@@ -25,6 +27,7 @@ export function useDeviceSettings(
   const [hydrated, setHydrated] = useState(false);
   const settingsRef = useRef(settings);
   const persistAllowedRef = useRef(false);
+  const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const setSettings = useCallback(
     (
       next:
@@ -39,6 +42,14 @@ export function useDeviceSettings(
     [],
   );
   const getSettings = useCallback(() => settingsRef.current, []);
+  const flushSettings = useCallback(async () => {
+    if (!persistAllowedRef.current) return;
+    if (persistTimerRef.current) {
+      clearTimeout(persistTimerRef.current);
+      persistTimerRef.current = null;
+    }
+    await store.save(settingsRef.current);
+  }, [store]);
 
   useEffect(() => {
     let cancelled = false;
@@ -55,14 +66,29 @@ export function useDeviceSettings(
 
   useEffect(() => {
     if (!hydrated || !persistAllowedRef.current) return;
-    const timer = setTimeout(() => {
+    persistTimerRef.current = setTimeout(() => {
+      persistTimerRef.current = null;
       void store.save(settingsRef.current);
     }, SAVE_DEBOUNCE_MS);
-    return () => clearTimeout(timer);
+    return () => {
+      if (persistTimerRef.current) {
+        clearTimeout(persistTimerRef.current);
+        persistTimerRef.current = null;
+      }
+    };
   }, [hydrated, settings, store]);
 
   const hydratedRef = useRef(false);
   hydratedRef.current = hydrated;
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "background" || state === "inactive") {
+        void flushSettings();
+      }
+    });
+    return () => subscription.remove();
+  }, [flushSettings]);
 
   useEffect(() => {
     return () => {
@@ -72,5 +98,5 @@ export function useDeviceSettings(
     };
   }, [store]);
 
-  return { settings, hydrated, setSettings, getSettings };
+  return { settings, hydrated, setSettings, getSettings, flushSettings };
 }

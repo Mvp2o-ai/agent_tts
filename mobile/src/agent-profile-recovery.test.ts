@@ -47,6 +47,35 @@ describe("agent profile recovery", () => {
     assert.deepEqual(merged.origin, recovered.origin);
   });
 
+  it("restores a startup repository set that was only in the provider checkpoint", () => {
+    const recoveredRepos = [
+      {
+        id: 9,
+        fullName: "acme/from-checkpoint",
+        cloneUrl: "https://github.com/acme/from-checkpoint.git",
+      },
+    ];
+    const current = {
+      id: "agent-1",
+      name: "Agent",
+      gatewayUrl: "https://old.example",
+      token: "old-token",
+      gitCredentialId: "github-current",
+    };
+    const recovered = {
+      ...current,
+      gatewayUrl: "https://new.example",
+      token: "new-token",
+      repositories: recoveredRepos,
+      origin: { kind: "provider" as const, provisioningPhase: "ready" },
+    };
+
+    assert.deepEqual(
+      mergeRecoveredAgentProfile(current, recovered).repositories,
+      recoveredRepos,
+    );
+  });
+
   it("restores a missing GitHub binding without overwriting a current one", () => {
     const base = {
       id: "agent-1",

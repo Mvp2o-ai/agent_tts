@@ -1,0 +1,6 @@
+{
+  "status": "ready",
+  "image": "ghcr.io/mvp2o-ai/agent_tts@sha256:183bde18caa6361d1cb910cae3de7ab6c8a1087ee4d237efe7b7f396cd0d2a48",
+  "sourceCommit": "4cd720d4baedb61d61fa03ff72601e2f9ef1f695",
+  "runtimeFingerprint": "sha256:d8819d7d3cac1cb40408a4f41b118534591d487f93ad41e4059537d9220d9058"
+}
