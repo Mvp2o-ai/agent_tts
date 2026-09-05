@@ -1,6 +1,6 @@
 {
-  "status": "pending",
-  "image": "ghcr.io/mvp2o-ai/agent_tts@sha256:183bde18caa6361d1cb910cae3de7ab6c8a1087ee4d237efe7b7f396cd0d2a48",
-  "sourceCommit": "4cd720d4baedb61d61fa03ff72601e2f9ef1f695",
-  "runtimeFingerprint": "sha256:d8819d7d3cac1cb40408a4f41b118534591d487f93ad41e4059537d9220d9058"
+  "status": "ready",
+  "image": "ghcr.io/mvp2o-ai/agent_tts@sha256:41897a5be821fffc2b53cf5db43116e12701507aca11437c7ce4573f3905bef7",
+  "sourceCommit": "657a904301ba96712470b5534699096be898bdce",
+  "runtimeFingerprint": "sha256:5f192cb367fa0a437a5f61cd702ae396625495f2019eeac04cac4d544e4ebdc4"
 }
