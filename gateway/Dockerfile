@@ -5,7 +5,7 @@
 # image. Only the mounted config volume (SQLite) survives.
 #
 # Node 24: node:sqlite is stable/unflagged (the config store depends on it).
-FROM node:24-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e
+FROM node:25-bookworm-slim@sha256:81db02c4b671288a03915da9534dbd54f96d0e7c24d80ccc54f5b36b2e684370
 
 ARG GH_VERSION=2.98.0
 
