@@ -40,7 +40,7 @@
     "eslint": "^9.39.5",
     "eslint-config-expo": "^57.0.2",
     "tsx": "^4.19.0",
-    "typescript": "~6.0.3"
+    "typescript": "~7.0.2"
   },
   "overrides": {
     "xcode": {
